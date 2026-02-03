@@ -1,0 +1,337 @@
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using Microsoft.Extensions.Logging;
+
+namespace LocalProxyServer
+{
+    public class ProxyServer
+    {
+        private readonly int _port;
+        private readonly string? _upstreamHost;
+        private readonly int _upstreamPort;
+        private readonly string _upstreamType;
+        private readonly X509Certificate2? _serverCertificate;
+        private readonly ILogger<ProxyServer> _logger;
+        private TcpListener? _listener;
+        private bool _isRunning;
+
+        public ProxyServer(
+            int port, 
+            string? upstreamHost = null, 
+            int upstreamPort = 0,
+            string upstreamType = "direct",
+            X509Certificate2? serverCertificate = null,
+            ILogger<ProxyServer>? logger = null)
+        {
+            _port = port;
+            _upstreamHost = upstreamHost;
+            _upstreamPort = upstreamPort;
+            _upstreamType = upstreamType.ToLowerInvariant();
+            _serverCertificate = serverCertificate;
+            _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ProxyServer>.Instance;
+        }
+
+        public async Task StartAsync()
+        {
+            _listener = new TcpListener(IPAddress.Any, _port);
+            _listener.Start();
+            _isRunning = true;
+            _logger.LogInformation("Proxy server started on port {Port}", _port);
+            
+            if (_serverCertificate != null)
+            {
+                _logger.LogInformation("HTTPS proxy support enabled (TLS to Proxy)");
+            }
+            
+            if (!string.IsNullOrEmpty(_upstreamHost))
+            {
+                _logger.LogInformation("Using upstream {Type} proxy: {Host}:{Port}", 
+                    _upstreamType.ToUpper(), _upstreamHost, _upstreamPort);
+            }
+
+            while (_isRunning)
+            {
+                try
+                {
+                    var client = await _listener.AcceptTcpClientAsync();
+                    _ = HandleClientAsync(client);
+                }
+                catch (Exception ex)
+                {
+                    if (_isRunning) 
+                        _logger.LogError(ex, "Error accepting client");
+                }
+            }
+        }
+
+        private async Task HandleClientAsync(TcpClient client)
+        {
+            var clientEndpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+            _logger.LogInformation("New client connection from {Endpoint}", clientEndpoint);
+            
+            Stream? finalStream = null;
+            try
+            {
+                finalStream = client.GetStream();
+
+                if (_serverCertificate != null)
+                {
+                    _logger.LogDebug("Establishing TLS connection with client {Endpoint}", clientEndpoint);
+                    var sslStream = new SslStream(finalStream, false);
+                    await sslStream.AuthenticateAsServerAsync(_serverCertificate, false, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+                    finalStream = sslStream;
+                    _logger.LogDebug("TLS connection established with client {Endpoint}", clientEndpoint);
+                }
+
+                // Read request line
+                var reader = new StreamReader(finalStream, Encoding.ASCII, leaveOpen: true);
+                var line = await reader.ReadLineAsync();
+                if (string.IsNullOrEmpty(line))
+                {
+                    _logger.LogWarning("Empty request from client {Endpoint}", clientEndpoint);
+                    return;
+                }
+
+                var parts = line.Split(' ');
+                if (parts.Length < 3)
+                {
+                    _logger.LogWarning("Invalid request line from client {Endpoint}: {Line}", clientEndpoint, line);
+                    return;
+                }
+
+                var method = parts[0];
+                var url = parts[1];
+
+                _logger.LogInformation("Request from {Endpoint}: {Method} {Url}", clientEndpoint, method, url);
+
+                if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleConnectAsync(client, finalStream, url, clientEndpoint);
+                }
+                else
+                {
+                    await HandleHttpAsync(client, finalStream, line, reader, clientEndpoint);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling client {Endpoint}", clientEndpoint);
+            }
+            finally
+            {
+                finalStream?.Dispose();
+                client.Dispose();
+                _logger.LogInformation("Client connection closed: {Endpoint}", clientEndpoint);
+            }
+        }
+
+        private async Task HandleConnectAsync(TcpClient client, Stream clientStream, string target, string clientEndpoint)
+        {
+            var targetParts = target.Split(':');
+            var host = targetParts[0];
+            var port = targetParts.Length > 1 ? int.Parse(targetParts[1]) : 443;
+
+            _logger.LogInformation("CONNECT request from {Client} to {Host}:{Port}", clientEndpoint, host, port);
+
+            TcpClient? upstreamClient = null;
+            try
+            {
+                upstreamClient = await ConnectToUpstreamAsync(host, port);
+
+                _logger.LogInformation("Tunnel established: {Client} <-> {Host}:{Port}", clientEndpoint, host, port);
+
+                using (upstreamClient)
+                using (var upstreamStream = upstreamClient.GetStream())
+                {
+                    // Send 200 Connection Established to client
+                    var response = "HTTP/1.1 200 Connection Established\r\n\r\n";
+                    await clientStream.WriteAsync(Encoding.ASCII.GetBytes(response));
+
+                    // Track data transfer
+                    var clientToServer = CopyWithLoggingAsync(clientStream, upstreamStream, 
+                        $"{clientEndpoint} -> {host}:{port}");
+                    var serverToClient = CopyWithLoggingAsync(upstreamStream, clientStream, 
+                        $"{host}:{port} -> {clientEndpoint}");
+
+                    await Task.WhenAll(clientToServer, serverToClient);
+                }
+                
+                _logger.LogInformation("Tunnel closed: {Client} <-> {Host}:{Port}", clientEndpoint, host, port);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling CONNECT to {Host}:{Port} from {Client}", host, port, clientEndpoint);
+                throw;
+            }
+            finally
+            {
+                upstreamClient?.Dispose();
+            }
+        }
+
+        private async Task HandleHttpAsync(TcpClient client, Stream clientStream, string firstLine, StreamReader reader, string clientEndpoint)
+        {
+            // Simple HTTP proxying
+            var parts = firstLine.Split(' ');
+            var url = parts[1];
+            
+            string host;
+            int port;
+            string pathAndQuery;
+
+            if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                var uri = new Uri(url);
+                host = uri.Host;
+                port = uri.Port;
+                pathAndQuery = uri.PathAndQuery;
+            }
+            else
+            {
+                // If it's a relative path, we must find the Host header
+                pathAndQuery = url;
+                host = ""; // Will find in headers
+                port = 80;
+            }
+
+            // Need to read headers to find Host if not in URL, and to forward them
+            var headers = new List<string>();
+            string? header;
+            while (!string.IsNullOrEmpty(header = await reader.ReadLineAsync()))
+            {
+                headers.Add(header);
+                if (string.IsNullOrEmpty(host) && header.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = header.Substring(5).Trim();
+                    if (host.Contains(':'))
+                    {
+                        var hParts = host.Split(':');
+                        host = hParts[0];
+                        port = int.Parse(hParts[1]);
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(host))
+            {
+                _logger.LogWarning("Could not determine host from HTTP request from {Client}", clientEndpoint);
+                return;
+            }
+
+            _logger.LogInformation("HTTP request from {Client} to {Host}:{Port} {Path}", 
+                clientEndpoint, host, port, pathAndQuery);
+
+            TcpClient? upstreamClient = null;
+            try
+            {
+                upstreamClient = await ConnectToUpstreamAsync(host, port);
+
+                using (upstreamClient)
+                using (var upstreamStream = upstreamClient.GetStream())
+                {
+                    // Forward the first line but with relative path
+                    var protocol = parts.Length > 2 ? parts[2] : "HTTP/1.1";
+                    var newFirstLine = $"{parts[0]} {pathAndQuery} {protocol}\r\n";
+                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(newFirstLine));
+
+                    // Forward remaining headers
+                    foreach (var h in headers)
+                    {
+                        await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(h + "\r\n"));
+                    }
+                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes("\r\n"));
+
+                    _logger.LogInformation("HTTP proxy established: {Client} <-> {Host}:{Port}", 
+                        clientEndpoint, host, port);
+
+                    // Tunnel remaining traffic (body and response)
+                    await Task.WhenAll(
+                        clientStream.CopyToAsync(upstreamStream),
+                        upstreamStream.CopyToAsync(clientStream)
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling HTTP request to {Host}:{Port} from {Client}", 
+                    host, port, clientEndpoint);
+                throw;
+            }
+            finally
+            {
+                upstreamClient?.Dispose();
+            }
+        }
+
+        private async Task CopyWithLoggingAsync(Stream source, Stream destination, string direction)
+        {
+            var buffer = new byte[81920]; // 80KB buffer
+            long totalBytes = 0;
+            int bytesRead;
+
+            try
+            {
+                while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    await destination.WriteAsync(buffer, 0, bytesRead);
+                    totalBytes += bytesRead;
+                }
+                
+                _logger.LogDebug("Transfer completed {Direction}: {TotalBytes} bytes", 
+                    direction, totalBytes);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Transfer ended {Direction} after {TotalBytes} bytes", 
+                    direction, totalBytes);
+                throw;
+            }
+        }
+
+        private async Task<TcpClient> ConnectToUpstreamAsync(string targetHost, int targetPort)
+        {
+            if (string.IsNullOrEmpty(_upstreamHost))
+            {
+                // Direct connection
+                _logger.LogDebug("Connecting directly to {Host}:{Port}", targetHost, targetPort);
+                var client = new TcpClient();
+                await client.ConnectAsync(targetHost, targetPort);
+                return client;
+            }
+
+            return _upstreamType switch
+            {
+                "socks5" => await ConnectViaSocks5Async(targetHost, targetPort),
+                "http" => await ConnectViaHttpAsync(targetHost, targetPort),
+                _ => throw new NotSupportedException($"Upstream type '{_upstreamType}' is not supported")
+            };
+        }
+
+        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort)
+        {
+            _logger.LogDebug("Connecting to {Host}:{Port} via SOCKS5 {UpstreamHost}:{UpstreamPort}",
+                targetHost, targetPort, _upstreamHost, _upstreamPort);
+            
+            var socks = new Socks5Client(_upstreamHost!, _upstreamPort, _logger);
+            return await socks.ConnectAsync(targetHost, targetPort);
+        }
+
+        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort)
+        {
+            _logger.LogDebug("Connecting to {Host}:{Port} via HTTP proxy {UpstreamHost}:{UpstreamPort}",
+                targetHost, targetPort, _upstreamHost, _upstreamPort);
+            
+            var httpProxy = new HttpProxyClient(_upstreamHost!, _upstreamPort, _logger);
+            return await httpProxy.ConnectAsync(targetHost, targetPort);
+        }
+
+        public void Stop()
+        {
+            _isRunning = false;
+            _listener?.Stop();
+        }
+    }
+}
