@@ -75,15 +75,40 @@ namespace LocalProxyServer
             Stream? finalStream = null;
             try
             {
-                finalStream = client.GetStream();
-
-                if (_serverCertificate != null)
+                var networkStream = client.GetStream();
+                var (prefixedStream, isTls) = await PrepareClientStreamAsync(networkStream, clientEndpoint);
+                if (prefixedStream == null)
                 {
+                    return;
+                }
+
+                if (isTls)
+                {
+                    if (_serverCertificate == null)
+                    {
+                        _logger.LogWarning("TLS request received from {Endpoint} but HTTPS is not enabled.", clientEndpoint);
+                        return;
+                    }
+
                     _logger.LogDebug("Establishing TLS connection with client {Endpoint}", clientEndpoint);
-                    var sslStream = new SslStream(finalStream, false);
-                    await sslStream.AuthenticateAsServerAsync(_serverCertificate, false, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+                    var sslStream = new SslStream(prefixedStream, false);
+                    try
+                    {
+                        await sslStream.AuthenticateAsServerAsync(_serverCertificate, false, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+                    }
+                    catch (System.Security.Authentication.AuthenticationException ex)
+                    {
+                        _logger.LogWarning(ex, "TLS handshake failed with client {Endpoint}. Client may be using HTTP to connect to an HTTPS proxy.", clientEndpoint);
+                        return;
+                    }
+
                     finalStream = sslStream;
                     _logger.LogDebug("TLS connection established with client {Endpoint}", clientEndpoint);
+                }
+                else
+                {
+                    finalStream = prefixedStream;
+                    _logger.LogDebug("Handling HTTP proxy request from {Endpoint}", clientEndpoint);
                 }
 
                 // Read request line
@@ -125,6 +150,127 @@ namespace LocalProxyServer
                 finalStream?.Dispose();
                 client.Dispose();
                 _logger.LogInformation("Client connection closed: {Endpoint}", clientEndpoint);
+            }
+        }
+
+        private static bool LooksLikeTls(ReadOnlySpan<byte> buffer)
+        {
+            return buffer.Length >= 3 &&
+                   buffer[0] == 0x16 &&
+                   buffer[1] == 0x03 &&
+                   buffer[2] >= 0x01 &&
+                   buffer[2] <= 0x04;
+        }
+
+        private async Task<(Stream? Stream, bool IsTls)> PrepareClientStreamAsync(NetworkStream networkStream, string clientEndpoint)
+        {
+            var prefixBuffer = new byte[5];
+            int bytesRead;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            try
+            {
+                bytesRead = await networkStream.ReadAsync(prefixBuffer, 0, prefixBuffer.Length, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Timed out waiting for initial data from {Endpoint}", clientEndpoint);
+                return (null, false);
+            }
+
+            if (bytesRead == 0)
+            {
+                _logger.LogWarning("Client {Endpoint} closed connection before sending data", clientEndpoint);
+                return (null, false);
+            }
+
+            var prefix = new ReadOnlyMemory<byte>(prefixBuffer, 0, bytesRead);
+            var prefixedStream = new PrefixedStream(networkStream, prefix);
+            var isTls = LooksLikeTls(prefix.Span);
+            return (prefixedStream, isTls);
+        }
+
+        private sealed class PrefixedStream : Stream
+        {
+            private readonly Stream _inner;
+            private ReadOnlyMemory<byte> _prefix;
+
+            public PrefixedStream(Stream inner, ReadOnlyMemory<byte> prefix)
+            {
+                _inner = inner;
+                _prefix = prefix;
+            }
+
+            public override bool CanRead => _inner.CanRead;
+            public override bool CanSeek => false;
+            public override bool CanWrite => _inner.CanWrite;
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush() => _inner.Flush();
+            public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                var read = ReadFromPrefix(buffer.AsSpan(offset, count));
+                return read > 0 ? read : _inner.Read(buffer, offset, count);
+            }
+
+            public override int Read(Span<byte> buffer)
+            {
+                var read = ReadFromPrefix(buffer);
+                return read > 0 ? read : _inner.Read(buffer);
+            }
+
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            {
+                var read = ReadFromPrefix(buffer.AsSpan(offset, count));
+                return read > 0 ? Task.FromResult(read) : _inner.ReadAsync(buffer, offset, count, cancellationToken);
+            }
+
+            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                var read = ReadFromPrefix(buffer.Span);
+                return read > 0 ? ValueTask.FromResult(read) : _inner.ReadAsync(buffer, cancellationToken);
+            }
+
+            public override void Write(byte[] buffer, int offset, int count) => _inner.Write(buffer, offset, count);
+            public override void Write(ReadOnlySpan<byte> buffer) => _inner.Write(buffer);
+            public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+                => _inner.WriteAsync(buffer, offset, count, cancellationToken);
+
+            public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+                => _inner.WriteAsync(buffer, cancellationToken);
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    _inner.Dispose();
+                }
+
+                base.Dispose(disposing);
+            }
+
+            private int ReadFromPrefix(Span<byte> destination)
+            {
+                if (_prefix.IsEmpty)
+                {
+                    return 0;
+                }
+
+                var toCopy = Math.Min(destination.Length, _prefix.Length);
+                _prefix.Span[..toCopy].CopyTo(destination);
+                _prefix = _prefix.Slice(toCopy);
+                return toCopy;
             }
         }
 

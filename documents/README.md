@@ -12,7 +12,7 @@ dotnet run --environment Development
 
 Configuration file: `appsettings.Development.json`
 - Port: 8080
-- Protocol: HTTP (no encryption)
+- Protocol: HTTP only (no encryption)
 - Suitable for: Local testing, development debugging
 
 **Test Commands:**
@@ -31,13 +31,16 @@ dotnet run --environment Production
 
 Configuration file: `appsettings.Production.json`
 - Port: 8443
-- Protocol: HTTPS (TLS encrypted)
+- Protocol: HTTPS enabled (auto-detects HTTP/HTTPS on the same port)
 - Suitable for: Production deployment, scenarios requiring encryption
 
 **Test Commands:**
 ```bash
 # Need to add --proxy-insecure to skip certificate verification (local self-signed certificate)
 curl -x https://localhost:8443 --proxy-insecure -v https://www.google.com
+
+# HTTP requests are also accepted on the same port
+curl -x http://localhost:8443 -v https://www.google.com
 
 # Or after trusting CA certificate
 curl -x https://localhost:8443 -v https://www.google.com
@@ -63,7 +66,7 @@ Main configuration file, currently set to HTTPS mode.
 {
   "Proxy": {
     "Port": 8443,
-    "UseHttps": true   // HTTPS mode, secure encryption
+    "UseHttps": true   // HTTPS enabled, auto-detects HTTP/HTTPS
   }
 }
 ```
@@ -87,13 +90,13 @@ dotnet run
 1. Settings → System → Open proxy settings
 2. Manual proxy configuration:
    - HTTP: `localhost:8080` (development)
-   - HTTPS: `localhost:8443` (production)
+   - HTTPS: `localhost:8443` (production, also accepts HTTP)
    - SOCKS5: `localhost:1080` (upstream)
 
 ### Firefox
 1. Settings → Network Settings → Manual proxy configuration
 2. HTTP proxy: `localhost:8080`
-3. HTTPS proxy: `localhost:8443`
+3. HTTPS proxy: `localhost:8443` (also accepts HTTP)
 
 ### SwitchyOmega (Recommended)
 ```json
@@ -134,6 +137,9 @@ curl -x http://localhost:8080 http://ifconfig.me
 
 # HTTPS proxy (need to skip certificate verification)
 curl -x https://localhost:8443 --proxy-insecure https://www.google.com
+
+# HTTP over HTTPS-enabled port
+curl -x http://localhost:8443 https://www.google.com
 
 # View proxy information
 curl -x http://localhost:8080 -v https://www.google.com 2>&1 | head -20
@@ -210,15 +216,15 @@ Get-ChildItem Cert:\LocalMachine\Root | Where-Object {$_.Subject -like "*LocalPr
 
 ### Issue 1: "Proxy CONNECT aborted"
 
-**Cause:** Configuration uses HTTPS but client connects with HTTP
+**Cause:** HTTPS is disabled (`UseHttps: false`) but the client connects using an HTTPS proxy URL
 
 **Solution:**
 ```bash
-# Option 1: Switch to HTTP mode (development environment)
+# Option 1: Use HTTP proxy URL when HTTPS is disabled
 dotnet run --environment Development
 curl -x http://localhost:8080 https://www.google.com
 
-# Option 2: Use HTTPS (production environment)
+# Option 2: Enable HTTPS support
 dotnet run --environment Production
 curl -x https://localhost:8443 --proxy-insecure https://www.google.com
 ```

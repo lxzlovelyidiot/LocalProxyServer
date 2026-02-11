@@ -21,26 +21,30 @@ namespace LocalProxyServer
         public async Task<TcpClient> ConnectAsync(string targetHost, int targetPort)
         {
             _logger?.LogDebug("Connecting to SOCKS5 server {SocksHost}:{SocksPort}", _socksHost, _socksPort);
-            
+
             var client = new TcpClient();
             await client.ConnectAsync(_socksHost, _socksPort);
+            client.ReceiveTimeout = 10000;
+            client.SendTimeout = 10000;
             var stream = client.GetStream();
 
             _logger?.LogDebug("SOCKS5 handshake started for target {Target}:{Port}", targetHost, targetPort);
 
             // 1. Handshake
             // [Version, NumMethods, Method1, ...]
-            await stream.WriteAsync(new byte[] { 0x05, 0x01, 0x00 });
-            var response = new byte[2];
-            await ReadExactlyAsync(stream, response);
-
-            if (response[0] != 0x05 || response[1] != 0x00)
+            try
             {
-                _logger?.LogError("SOCKS5 handshake failed. Version: {Version}, Method: {Method}", 
-                    response[0], response[1]);
-                client.Close();
-                throw new Exception("SOCKS5 Handshake failed or authentication required.");
-            }
+                await stream.WriteAsync(new byte[] { 0x05, 0x01, 0x00 });
+                var response = new byte[2];
+                await ReadExactlyAsync(stream, response);
+
+                if (response[0] != 0x05 || response[1] != 0x00)
+                {
+                    _logger?.LogError("SOCKS5 handshake failed. Version: {Version}, Method: {Method}", 
+                        response[0], response[1]);
+                    client.Close();
+                    throw new IOException("SOCKS5 handshake failed or authentication required.");
+                }
 
             _logger?.LogDebug("SOCKS5 handshake successful, sending connect request");
 
@@ -75,20 +79,20 @@ namespace LocalProxyServer
             request.Add((byte)(targetPort >> 8));
             request.Add((byte)(targetPort & 0xFF));
 
-            await stream.WriteAsync(request.ToArray());
+                await stream.WriteAsync(request.ToArray());
 
-            // 3. Response
-            var resHeader = new byte[4];
-            await ReadExactlyAsync(stream, resHeader);
+                // 3. Response
+                var resHeader = new byte[4];
+                await ReadExactlyAsync(stream, resHeader);
 
-            if (resHeader[1] != 0x00)
-            {
-                var errorMsg = GetSocks5ErrorMessage(resHeader[1]);
-                _logger?.LogError("SOCKS5 connect failed with error code: {Code} - {Message}", 
-                    resHeader[1], errorMsg);
-                client.Close();
-                throw new Exception($"SOCKS5 Connect failed with error code: {resHeader[1]} - {errorMsg}");
-            }
+                if (resHeader[1] != 0x00)
+                {
+                    var errorMsg = GetSocks5ErrorMessage(resHeader[1]);
+                    _logger?.LogError("SOCKS5 connect failed with error code: {Code} - {Message}", 
+                        resHeader[1], errorMsg);
+                    client.Close();
+                    throw new IOException($"SOCKS5 connect failed with error code: {resHeader[1]} - {errorMsg}");
+                }
 
             // Skip remaining address part of the response
             byte addrType = resHeader[3];
@@ -100,13 +104,31 @@ namespace LocalProxyServer
                 _ => throw new Exception("Unknown address type in SOCKS5 response")
             };
 
-            var skipBuf = new byte[skipLen];
-            await ReadExactlyAsync(stream, skipBuf);
+                var skipBuf = new byte[skipLen];
+                await ReadExactlyAsync(stream, skipBuf);
 
-            _logger?.LogInformation("SOCKS5 connection established to {Target}:{Port} via {SocksHost}:{SocksPort}", 
-                targetHost, targetPort, _socksHost, _socksPort);
+                _logger?.LogInformation("SOCKS5 connection established to {Target}:{Port} via {SocksHost}:{SocksPort}", 
+                    targetHost, targetPort, _socksHost, _socksPort);
 
-            return client;
+                return client;
+            }
+            catch (EndOfStreamException ex)
+            {
+                client.Dispose();
+                _logger?.LogError(ex, "SOCKS5 server closed the connection during handshake");
+                throw new IOException("SOCKS5 server closed the connection during handshake", ex);
+            }
+            catch (IOException)
+            {
+                client.Dispose();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                client.Dispose();
+                _logger?.LogError(ex, "Unexpected error while connecting to SOCKS5 server");
+                throw;
+            }
         }
 
         private static string GetSocks5ErrorMessage(byte errorCode)

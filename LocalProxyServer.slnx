@@ -1,3 +1,11 @@
 <Solution>
+  <Folder Name="/documents/">
+    <File Path="documents/AUTO_RESTART.md" />
+    <File Path="documents/JOB_OBJECTS.md" />
+    <File Path="documents/JOB_OBJECTS_SUMMARY.md" />
+    <File Path="documents/PROCESS_CLEANUP.md" />
+    <File Path="documents/QUICKSTART.md" />
+    <File Path="documents/README.md" />
+  </Folder>
   <Project Path="LocalProxyServer/LocalProxyServer.csproj" />
 </Solution>

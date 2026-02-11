@@ -3,10 +3,10 @@
 ## Start Server
 
 ```bash
-# Development environment (HTTP proxy)
+# Development environment (HTTP-only)
 dotnet run --environment Development
 
-# Production environment (HTTPS proxy)
+# Production environment (HTTPS enabled with HTTP/HTTPS auto-detect)
 dotnet run --environment Production
 
 # Default configuration
@@ -34,6 +34,9 @@ curl -x https://localhost:8443 --proxy-insecure https://www.google.com
 
 # View detailed information
 curl -x https://localhost:8443 --proxy-insecure -v https://www.google.com
+
+# HTTP also works on the same port
+curl -x http://localhost:8443 https://www.google.com
 ```
 
 ## Configuration Comparison
@@ -42,9 +45,9 @@ curl -x https://localhost:8443 --proxy-insecure -v https://www.google.com
 |---------|-------------|--------------|
 | Encryption | ❌ None | ✅ TLS |
 | Port | 8080 | 8443 |
-| Certificate | Not needed | Self-signed CA |
-| Testing | Direct use | Needs --proxy-insecure |
-| Suitable for | Development testing | Production deployment |
+| Certificate | Not needed | Self-signed CA (for HTTPS) |
+| Testing | Direct use | HTTPS needs --proxy-insecure |
+| Suitable for | Development testing | Production deployment (HTTP/HTTPS auto-detect) |
 
 ## Browser Settings
 
@@ -78,13 +81,17 @@ Remove-Item env:HTTPS_PROXY
 ## Common Issues
 
 ### ❌ "Proxy CONNECT aborted"
-**Cause:** Configuration is HTTPS but using HTTP connection
+**Cause:** HTTPS is disabled (`UseHttps: false`) but client uses an HTTPS proxy URL
 
 **Solution:**
 ```bash
-# Use Development environment (HTTP mode)
+# Use HTTP proxy URL when HTTPS is disabled
 dotnet run --environment Development
 curl -x http://localhost:8080 https://www.google.com
+
+# Or enable HTTPS support
+dotnet run --environment Production
+curl -x https://localhost:8443 --proxy-insecure https://www.google.com
 ```
 
 ### ❌ "Connection refused"
