@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -12,12 +13,14 @@ namespace LocalProxyServer
         private readonly string _proxyHost;
         private readonly int _proxyPort;
         private readonly ILogger? _logger;
+        private readonly AddressFamily? _preferredAddressFamily;
 
-        public HttpProxyClient(string proxyHost, int proxyPort, ILogger? logger = null)
+        public HttpProxyClient(string proxyHost, int proxyPort, ILogger? logger = null, AddressFamily? preferredAddressFamily = null)
         {
             _proxyHost = proxyHost;
             _proxyPort = proxyPort;
             _logger = logger;
+            _preferredAddressFamily = preferredAddressFamily;
         }
 
         /// <summary>
@@ -27,15 +30,15 @@ namespace LocalProxyServer
         {
             _logger?.LogDebug("Connecting to HTTP proxy {ProxyHost}:{ProxyPort}", _proxyHost, _proxyPort);
 
-            var client = new TcpClient();
-            await client.ConnectAsync(_proxyHost, _proxyPort);
+            var client = await TcpClientConnector.ConnectAsync(_proxyHost, _proxyPort, _preferredAddressFamily);
             var stream = client.GetStream();
 
             try
             {
+                var connectHost = FormatConnectHost(targetHost);
                 // Send CONNECT request
-                var connectRequest = $"CONNECT {targetHost}:{targetPort} HTTP/1.1\r\n" +
-                                   $"Host: {targetHost}:{targetPort}\r\n" +
+                var connectRequest = $"CONNECT {connectHost}:{targetPort} HTTP/1.1\r\n" +
+                                   $"Host: {connectHost}:{targetPort}\r\n" +
                                    "Proxy-Connection: Keep-Alive\r\n" +
                                    "\r\n";
 
@@ -110,6 +113,16 @@ namespace LocalProxyServer
                 client.Dispose();
                 throw;
             }
+        }
+
+        private static string FormatConnectHost(string targetHost)
+        {
+            if (IPAddress.TryParse(targetHost, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                return $"[{targetHost}]";
+            }
+
+            return targetHost;
         }
     }
 }

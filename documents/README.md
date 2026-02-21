@@ -19,6 +19,9 @@ Configuration file: `appsettings.Development.json`
 ```bash
 curl -x http://localhost:8080 -v https://www.google.com
 curl -x http://localhost:8080 https://api.github.com
+
+# IPv6 loopback
+curl -x http://[::1]:8080 -v https://www.google.com
 ```
 
 ### Production Environment (HTTPS Proxy - Secure)
@@ -44,12 +47,17 @@ curl -x http://localhost:8443 -v https://www.google.com
 
 # Or after trusting CA certificate
 curl -x https://localhost:8443 -v https://www.google.com
+
+# IPv6 loopback
+curl -x https://[::1]:8443 --proxy-insecure -v https://www.google.com
 ```
 
 ## Configuration Files
 
 ### appsettings.json (Default Configuration)
 Main configuration file, currently set to HTTPS mode.
+
+IPv6 is supported automatically. If the client connects via IPv6, the proxy prefers IPv6 when connecting to upstream hosts or proxies.
 
 ### appsettings.Development.json (Development Environment)
 ```json
@@ -92,11 +100,13 @@ dotnet run
    - HTTP: `localhost:8080` (development)
    - HTTPS: `localhost:8443` (production, also accepts HTTP)
    - SOCKS5: `localhost:1080` (upstream)
+   - IPv6: `[::1]` with the same ports
 
 ### Firefox
 1. Settings → Network Settings → Manual proxy configuration
 2. HTTP proxy: `localhost:8080`
 3. HTTPS proxy: `localhost:8443` (also accepts HTTP)
+4. IPv6: `[::1]` with the same ports
 
 ### SwitchyOmega (Recommended)
 ```json
@@ -135,11 +145,17 @@ curl -x http://localhost:8080 https://www.google.com
 curl -x http://localhost:8080 https://api.github.com
 curl -x http://localhost:8080 http://ifconfig.me
 
+# IPv6 HTTP proxy
+curl -x http://[::1]:8080 https://www.google.com
+
 # HTTPS proxy (need to skip certificate verification)
 curl -x https://localhost:8443 --proxy-insecure https://www.google.com
 
 # HTTP over HTTPS-enabled port
 curl -x http://localhost:8443 https://www.google.com
+
+# IPv6 HTTPS proxy
+curl -x https://[::1]:8443 --proxy-insecure https://www.google.com
 
 # View proxy information
 curl -x http://localhost:8080 -v https://www.google.com 2>&1 | head -20

@@ -36,7 +36,17 @@ namespace LocalProxyServer
 
         public async Task StartAsync()
         {
-            _listener = new TcpListener(IPAddress.Any, _port);
+            if (Socket.OSSupportsIPv6)
+            {
+                _listener = new TcpListener(IPAddress.IPv6Any, _port);
+                _listener.Server.DualMode = true;
+                _logger.LogInformation("IPv6 dual-mode listener enabled");
+            }
+            else
+            {
+                _listener = new TcpListener(IPAddress.Any, _port);
+            }
+
             _listener.Start();
             _isRunning = true;
             _logger.LogInformation("Proxy server started on port {Port}", _port);
@@ -69,7 +79,9 @@ namespace LocalProxyServer
 
         private async Task HandleClientAsync(TcpClient client)
         {
-            var clientEndpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+            var remoteEndPoint = client.Client.RemoteEndPoint as IPEndPoint;
+            var clientAddressFamily = remoteEndPoint?.AddressFamily;
+            var clientEndpoint = remoteEndPoint?.ToString() ?? "unknown";
             _logger.LogInformation("New client connection from {Endpoint}", clientEndpoint);
             
             Stream? finalStream = null;
@@ -134,11 +146,11 @@ namespace LocalProxyServer
 
                 if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
                 {
-                    await HandleConnectAsync(client, finalStream, url, clientEndpoint);
+                    await HandleConnectAsync(client, finalStream, url, clientEndpoint, clientAddressFamily);
                 }
                 else
                 {
-                    await HandleHttpAsync(client, finalStream, line, reader, clientEndpoint);
+                    await HandleHttpAsync(client, finalStream, line, reader, clientEndpoint, clientAddressFamily);
                 }
             }
             catch (Exception ex)
@@ -274,18 +286,20 @@ namespace LocalProxyServer
             }
         }
 
-        private async Task HandleConnectAsync(TcpClient client, Stream clientStream, string target, string clientEndpoint)
+        private async Task HandleConnectAsync(TcpClient client, Stream clientStream, string target, string clientEndpoint, AddressFamily? preferredAddressFamily)
         {
-            var targetParts = target.Split(':');
-            var host = targetParts[0];
-            var port = targetParts.Length > 1 ? int.Parse(targetParts[1]) : 443;
+            if (!TryParseHostAndPort(target, 443, out var host, out var port))
+            {
+                _logger.LogWarning("Invalid CONNECT target from {Client}: {Target}", clientEndpoint, target);
+                return;
+            }
 
             _logger.LogInformation("CONNECT request from {Client} to {Host}:{Port}", clientEndpoint, host, port);
 
             TcpClient? upstreamClient = null;
             try
             {
-                upstreamClient = await ConnectToUpstreamAsync(host, port);
+                upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
 
                 _logger.LogInformation("Tunnel established: {Client} <-> {Host}:{Port}", clientEndpoint, host, port);
 
@@ -318,7 +332,7 @@ namespace LocalProxyServer
             }
         }
 
-        private async Task HandleHttpAsync(TcpClient client, Stream clientStream, string firstLine, StreamReader reader, string clientEndpoint)
+        private async Task HandleHttpAsync(TcpClient client, Stream clientStream, string firstLine, StreamReader reader, string clientEndpoint, AddressFamily? preferredAddressFamily)
         {
             // Simple HTTP proxying
             var parts = firstLine.Split(' ');
@@ -351,12 +365,11 @@ namespace LocalProxyServer
                 headers.Add(header);
                 if (string.IsNullOrEmpty(host) && header.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
                 {
-                    host = header.Substring(5).Trim();
-                    if (host.Contains(':'))
+                    var hostValue = header.Substring(5).Trim();
+                    if (!TryParseHostAndPort(hostValue, port, out host, out port))
                     {
-                        var hParts = host.Split(':');
-                        host = hParts[0];
-                        port = int.Parse(hParts[1]);
+                        _logger.LogWarning("Invalid Host header from {Client}: {Host}", clientEndpoint, hostValue);
+                        return;
                     }
                 }
             }
@@ -373,7 +386,7 @@ namespace LocalProxyServer
             TcpClient? upstreamClient = null;
             try
             {
-                upstreamClient = await ConnectToUpstreamAsync(host, port);
+                upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
 
                 using (upstreamClient)
                 using (var upstreamStream = upstreamClient.GetStream())
@@ -437,41 +450,87 @@ namespace LocalProxyServer
             }
         }
 
-        private async Task<TcpClient> ConnectToUpstreamAsync(string targetHost, int targetPort)
+        private async Task<TcpClient> ConnectToUpstreamAsync(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
         {
             if (string.IsNullOrEmpty(_upstreamHost))
             {
                 // Direct connection
                 _logger.LogDebug("Connecting directly to {Host}:{Port}", targetHost, targetPort);
-                var client = new TcpClient();
-                await client.ConnectAsync(targetHost, targetPort);
-                return client;
+                return await TcpClientConnector.ConnectAsync(targetHost, targetPort, preferredAddressFamily);
             }
 
             return _upstreamType switch
             {
-                "socks5" => await ConnectViaSocks5Async(targetHost, targetPort),
-                "http" => await ConnectViaHttpAsync(targetHost, targetPort),
+                "socks5" => await ConnectViaSocks5Async(targetHost, targetPort, preferredAddressFamily),
+                "http" => await ConnectViaHttpAsync(targetHost, targetPort, preferredAddressFamily),
                 _ => throw new NotSupportedException($"Upstream type '{_upstreamType}' is not supported")
             };
         }
 
-        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort)
+        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via SOCKS5 {UpstreamHost}:{UpstreamPort}",
                 targetHost, targetPort, _upstreamHost, _upstreamPort);
             
-            var socks = new Socks5Client(_upstreamHost!, _upstreamPort, _logger);
+            var socks = new Socks5Client(_upstreamHost!, _upstreamPort, _logger, preferredAddressFamily);
             return await socks.ConnectAsync(targetHost, targetPort);
         }
 
-        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort)
+        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via HTTP proxy {UpstreamHost}:{UpstreamPort}",
                 targetHost, targetPort, _upstreamHost, _upstreamPort);
             
-            var httpProxy = new HttpProxyClient(_upstreamHost!, _upstreamPort, _logger);
+            var httpProxy = new HttpProxyClient(_upstreamHost!, _upstreamPort, _logger, preferredAddressFamily);
             return await httpProxy.ConnectAsync(targetHost, targetPort);
+        }
+
+        private static bool TryParseHostAndPort(string hostValue, int defaultPort, out string host, out int port)
+        {
+            host = string.Empty;
+            port = defaultPort;
+
+            if (string.IsNullOrWhiteSpace(hostValue))
+            {
+                return false;
+            }
+
+            var value = hostValue.Trim();
+            if (value.StartsWith('['))
+            {
+                var closingIndex = value.IndexOf(']');
+                if (closingIndex <= 0)
+                {
+                    return false;
+                }
+
+                host = value[1..closingIndex];
+                if (closingIndex + 1 < value.Length && value[closingIndex + 1] == ':')
+                {
+                    var portValue = value[(closingIndex + 2)..];
+                    if (!int.TryParse(portValue, out port))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            var lastColon = value.LastIndexOf(':');
+            if (lastColon > 0 && value.IndexOf(':') == lastColon)
+            {
+                host = value[..lastColon];
+                if (!int.TryParse(value[(lastColon + 1)..], out port))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            host = value;
+            return true;
         }
 
         public void Stop()

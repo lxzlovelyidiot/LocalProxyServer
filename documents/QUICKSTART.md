@@ -25,6 +25,9 @@ curl -x http://localhost:8080 -v https://www.google.com
 
 # Test API
 curl -x http://localhost:8080 https://api.github.com
+
+# IPv6 loopback
+curl -x http://[::1]:8080 https://www.google.com
 ```
 
 ### HTTPS Proxy (Port 8443)
@@ -37,6 +40,9 @@ curl -x https://localhost:8443 --proxy-insecure -v https://www.google.com
 
 # HTTP also works on the same port
 curl -x http://localhost:8443 https://www.google.com
+
+# IPv6 loopback
+curl -x https://[::1]:8443 --proxy-insecure https://www.google.com
 ```
 
 ## Configuration Comparison
@@ -56,12 +62,14 @@ curl -x http://localhost:8443 https://www.google.com
 2. Manual proxy:
    - HTTP: `localhost:8080`
    - HTTPS: `localhost:8443`
+   - IPv6: `[::1]` with the same ports
 
 ### Firefox
 1. Settings → Network Settings
 2. Manual proxy configuration:
    - HTTP proxy: `localhost:8080`
    - HTTPS proxy: `localhost:8443`
+   - IPv6: `[::1]` with the same ports
 
 ## Environment Variables (PowerShell)
 

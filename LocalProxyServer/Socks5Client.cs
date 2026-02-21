@@ -10,20 +10,21 @@ namespace LocalProxyServer
         private readonly string _socksHost;
         private readonly int _socksPort;
         private readonly ILogger? _logger;
+        private readonly AddressFamily? _preferredAddressFamily;
 
-        public Socks5Client(string socksHost, int socksPort, ILogger? logger = null)
+        public Socks5Client(string socksHost, int socksPort, ILogger? logger = null, AddressFamily? preferredAddressFamily = null)
         {
             _socksHost = socksHost;
             _socksPort = socksPort;
             _logger = logger;
+            _preferredAddressFamily = preferredAddressFamily;
         }
 
         public async Task<TcpClient> ConnectAsync(string targetHost, int targetPort)
         {
             _logger?.LogDebug("Connecting to SOCKS5 server {SocksHost}:{SocksPort}", _socksHost, _socksPort);
 
-            var client = new TcpClient();
-            await client.ConnectAsync(_socksHost, _socksPort);
+            var client = await TcpClientConnector.ConnectAsync(_socksHost, _socksPort, _preferredAddressFamily);
             client.ReceiveTimeout = 10000;
             client.SendTimeout = 10000;
             var stream = client.GetStream();

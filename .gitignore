@@ -1,3 +1,5 @@
 /LocalProxyServer/LocalProxyServer
 obj/
 bin/
+.vs/
+*.user
