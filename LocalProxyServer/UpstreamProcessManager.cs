@@ -11,6 +11,9 @@ namespace LocalProxyServer
     public class UpstreamProcessManager : IDisposable
     {
         private readonly UpstreamProcessConfiguration _config;
+        private readonly HealthCheckConfiguration? _healthCheckConfig;
+        private readonly string? _upstreamHost;
+        private readonly int _upstreamPort;
         private readonly ILogger? _logger;
         private Process? _process;
         private bool _disposed;
@@ -18,11 +21,19 @@ namespace LocalProxyServer
         private int _restartAttempts;
         private CancellationTokenSource? _monitorCts;
         private Task? _monitorTask;
+        private Task? _healthCheckTask;
         private JobObject? _jobObject;
 
-        public UpstreamProcessManager(UpstreamProcessConfiguration config, ILogger? logger = null)
+        public UpstreamProcessManager(UpstreamConfiguration upstream, ILogger? logger = null)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
+            ArgumentNullException.ThrowIfNull(upstream);
+            if (upstream.Process == null)
+                throw new ArgumentException("Upstream must have a Process configuration.", nameof(upstream));
+
+            _config = upstream.Process;
+            _healthCheckConfig = upstream.HealthCheck;
+            _upstreamHost = upstream.Host;
+            _upstreamPort = upstream.Port;
             _logger = logger;
 
             // Create job object on Windows to ensure child processes are killed when parent exits
@@ -171,6 +182,16 @@ namespace LocalProxyServer
                     _logger?.LogInformation("Process monitoring enabled with auto-restart");
                 }
 
+                // Start active health checking if configured
+                if (_healthCheckConfig?.Enabled == true && !string.IsNullOrEmpty(_upstreamHost))
+                {
+                    _monitorCts ??= new CancellationTokenSource();
+                    _healthCheckTask = HealthCheckLoopAsync(_monitorCts.Token);
+                    _logger?.LogInformation(
+                        "Active health check enabled for {Host}:{Port} (interval {Interval}ms, threshold {Threshold})",
+                        _upstreamHost, _upstreamPort, _healthCheckConfig.IntervalMs, _healthCheckConfig.FailureThreshold);
+                }
+
                 _logger?.LogInformation("Upstream process is ready");
                 return true;
             }
@@ -233,6 +254,106 @@ namespace LocalProxyServer
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "Error in process monitor");
+            }
+        }
+
+        /// <summary>
+        /// Periodically probes the upstream TCP endpoint and restarts the process when
+        /// consecutive failures reach <see cref="HealthCheckConfiguration.FailureThreshold"/>.
+        /// </summary>
+        private async Task HealthCheckLoopAsync(CancellationToken cancellationToken)
+        {
+            // Wait one full interval before the first probe so the process has time to initialise.
+            try
+            {
+                await Task.Delay(_healthCheckConfig!.IntervalMs, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            int consecutiveFailures = 0;
+
+            while (!cancellationToken.IsCancellationRequested && !_isStopping)
+            {
+                bool healthy = await ProbeUpstreamAsync(cancellationToken);
+
+                if (healthy)
+                {
+                    if (consecutiveFailures > 0)
+                    {
+                        _logger?.LogInformation(
+                            "Upstream {Host}:{Port} is healthy again after {Failures} failure(s)",
+                            _upstreamHost, _upstreamPort, consecutiveFailures);
+                    }
+                    consecutiveFailures = 0;
+                }
+                else
+                {
+                    consecutiveFailures++;
+                    _logger?.LogWarning(
+                        "Upstream health check failed for {Host}:{Port} ({Failures}/{Threshold})",
+                        _upstreamHost, _upstreamPort, consecutiveFailures, _healthCheckConfig.FailureThreshold);
+
+                    if (consecutiveFailures >= _healthCheckConfig.FailureThreshold)
+                    {
+                        _logger?.LogError(
+                            "Upstream {Host}:{Port} failed {Failures} consecutive health checks. Restarting process",
+                            _upstreamHost, _upstreamPort, consecutiveFailures);
+
+                        consecutiveFailures = 0;
+
+                        if (!await RestartProcessAsync(cancellationToken))
+                        {
+                            _logger?.LogError("Failed to restart upstream process after health check failure");
+                        }
+                        else
+                        {
+                            _logger?.LogInformation("Upstream process restarted due to health check failure");
+                        }
+                    }
+                }
+
+                try
+                {
+                    await Task.Delay(_healthCheckConfig.IntervalMs, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Attempts a TCP connection to the upstream host:port within the configured timeout.
+        /// Returns <c>true</c> when the connection succeeds.
+        /// </summary>
+        private async Task<bool> ProbeUpstreamAsync(CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(_upstreamHost))
+                return true;
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(_healthCheckConfig!.TimeoutMs);
+
+            try
+            {
+                using var tcpClient = new System.Net.Sockets.TcpClient();
+                await tcpClient.ConnectAsync(_upstreamHost, _upstreamPort, cts.Token);
+                _logger?.LogDebug("Health check succeeded for {Host}:{Port}", _upstreamHost, _upstreamPort);
+                return true;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger?.LogDebug("Health check timed out for {Host}:{Port}", _upstreamHost, _upstreamPort);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "Health check connection failed for {Host}:{Port}", _upstreamHost, _upstreamPort);
+                return false;
             }
         }
 
@@ -343,11 +464,15 @@ namespace LocalProxyServer
         {
             _isStopping = true;
 
-            // Stop monitoring
+            // Stop monitoring and health check tasks
             _monitorCts?.Cancel();
             try
             {
-                _monitorTask?.Wait(TimeSpan.FromSeconds(2));
+                var tasks = new List<Task>();
+                if (_monitorTask != null) tasks.Add(_monitorTask);
+                if (_healthCheckTask != null) tasks.Add(_healthCheckTask);
+                if (tasks.Count > 0)
+                    Task.WaitAll([.. tasks], TimeSpan.FromSeconds(2));
             }
             catch { }
 

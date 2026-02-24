@@ -65,7 +65,7 @@ namespace LocalProxyServer
                     if (upstream.Process != null)
                     {
                         var processLogger = loggerFactory.CreateLogger<UpstreamProcessManager>();
-                        var processManager = new UpstreamProcessManager(upstream.Process, processLogger);
+                            var processManager = new UpstreamProcessManager(upstream, processLogger);
                         _upstreamProcesses.Add(processManager);
 
                         var started = await processManager.StartAsync(cts.Token);

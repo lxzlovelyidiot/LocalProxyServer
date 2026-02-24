@@ -309,6 +309,75 @@ All path and argument fields support environment variable expansion (e.g., `%USE
 
 On Windows, all managed upstream processes are added to a [Job Object](JOB_OBJECTS_SUMMARY.md) and are terminated automatically when the proxy server exits.
 
+To complement process monitoring with active port probing, see [Upstream Health Check](#upstream-health-check) below.
+
+### Upstream Health Check
+
+When a `Process` block is present and `AutoStart` is `true`, you can configure an active health check that periodically probes the upstream TCP port and automatically restarts the process if it becomes unresponsive.
+
+> **Requires `Process.AutoStart: true`.**  
+> When `AutoStart` is `false`, the `HealthCheck` block is loaded but never activated — no probing occurs and no restart is attempted, because the process lifecycle is managed externally.
+
+```json
+{
+  "Enabled": true,
+  "Type": "socks5",
+  "Host": "localhost",
+  "Port": 1080,
+  "Process": {
+    "AutoStart": true,
+    "FileName": "ssh.exe",
+    "Arguments": "root@proxy.host -D 1080 -i private.key",
+    "AutoRestart": true,
+    "MaxRestartAttempts": 1000,
+    "RestartDelayMs": 3000
+  },
+  "HealthCheck": {
+    "Enabled": true,
+    "IntervalMs": 30000,
+    "TimeoutMs": 5000,
+    "FailureThreshold": 3
+  }
+}
+```
+
+#### How It Works
+
+1. After the process starts, waits one full `IntervalMs` before the first probe (allowing the process to initialize).
+2. Opens a TCP connection to `Host:Port` within `TimeoutMs`. Success = healthy; timeout or refused = failure.
+3. Counts **consecutive** failures only. A successful probe resets the counter to zero.
+4. When `consecutiveFailures >= FailureThreshold`, restarts the process immediately and resets the counter.
+5. Runs independently alongside the process-exit monitor (`AutoRestart`). Both can trigger a restart, whichever detects the problem first.
+
+> Health check restarts are **not** counted against `MaxRestartAttempts`. That counter only tracks crash-driven restarts from the process-exit monitor.
+
+#### Health Check Configuration Reference
+
+| Field              | Type | Default  | Description                                                                     |
+|--------------------|------|----------|---------------------------------------------------------------------------------|
+| `Enabled`          | bool | `true`   | Enable or disable health checking for this upstream.                            |
+| `IntervalMs`       | int  | `30000`  | Milliseconds between TCP probes (also the delay before the first probe).        |
+| `TimeoutMs`        | int  | `5000`   | Milliseconds before a probe attempt is considered timed out.                    |
+| `FailureThreshold` | int  | `3`      | Number of consecutive probe failures before the process is restarted.           |
+
+#### Log Messages
+
+```
+# Health check started
+[Info] Active health check enabled for localhost:1080 (interval 30000ms, threshold 3)
+
+# Probe failed (not yet at threshold)
+[Warn] Upstream health check failed for localhost:1080 (1/3)
+[Warn] Upstream health check failed for localhost:1080 (2/3)
+
+# Threshold reached → restart
+[Error] Upstream localhost:1080 failed 3 consecutive health checks. Restarting process
+[Info]  Upstream process restarted due to health check failure
+
+# Recovered
+[Info] Upstream localhost:1080 is healthy again after 2 failure(s)
+```
+
 ### Troubleshooting: Upstream Process Failed to Start
 
 Check the logs for the following messages:

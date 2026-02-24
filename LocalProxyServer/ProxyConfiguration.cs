@@ -65,6 +65,11 @@ namespace LocalProxyServer
         /// Command line configuration for starting upstream process.
         /// </summary>
         public UpstreamProcessConfiguration? Process { get; set; }
+
+        /// <summary>
+        /// Active health check configuration for this upstream.
+        /// </summary>
+        public HealthCheckConfiguration? HealthCheck { get; set; }
     }
 
     /// <summary>
@@ -117,5 +122,32 @@ namespace LocalProxyServer
         /// Delay in milliseconds before attempting to restart after a crash.
         /// </summary>
         public int RestartDelayMs { get; set; } = 3000;
+    }
+
+    /// <summary>
+    /// Active health check configuration for an upstream proxy.
+    /// A TCP connection attempt is made periodically; consecutive failures above the threshold trigger a restart.
+    /// </summary>
+    public class HealthCheckConfiguration
+    {
+        /// <summary>
+        /// Whether active health checking is enabled.
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// Interval in milliseconds between health check probes.
+        /// </summary>
+        public int IntervalMs { get; set; } = 30_000;
+
+        /// <summary>
+        /// Timeout in milliseconds for each TCP connection probe.
+        /// </summary>
+        public int TimeoutMs { get; set; } = 5_000;
+
+        /// <summary>
+        /// Number of consecutive probe failures before the upstream process is restarted.
+        /// </summary>
+        public int FailureThreshold { get; set; } = 3;
     }
 }
