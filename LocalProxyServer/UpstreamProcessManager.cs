@@ -130,7 +130,7 @@ namespace LocalProxyServer
                 }
 
                 // Add process to job object (Windows only)
-                if (_jobObject != null)
+                if (OperatingSystem.IsWindows() && _jobObject != null)
                 {
                     try
                     {
@@ -418,7 +418,7 @@ namespace LocalProxyServer
                 }
 
                 // Add process to job object (Windows only)
-                if (_jobObject != null)
+                if (OperatingSystem.IsWindows() && _jobObject != null)
                 {
                     try
                     {
@@ -516,7 +516,8 @@ namespace LocalProxyServer
             _process?.Dispose();
 
             // Dispose job object - this will kill all processes in the job
-            _jobObject?.Dispose();
+            if (OperatingSystem.IsWindows())
+                _jobObject?.Dispose();
 
             _disposed = true;
         }
