@@ -461,14 +461,11 @@ namespace LocalProxyServer
 
             if (_loadBalancingStrategy == "roundrobin")
             {
-                int index = Interlocked.Increment(ref _roundRobinIndex);
-                if (index < 0) {
-                    Interlocked.Exchange(ref _roundRobinIndex, 0);
-                    index = 0;
-                }
+                // Subtract 1 so the first call maps to upstream[0].
+                // Cast to uint before % to handle int overflow without a branch.
+                int skip = (int)((uint)(Interlocked.Increment(ref _roundRobinIndex) - 1) % (uint)_upstreams.Count);
                 // Start with the selected one, then failover to others if needed
-                selectedUpstreams = _upstreams.Skip(index % _upstreams.Count)
-                    .Concat(_upstreams.Take(index % _upstreams.Count));
+                selectedUpstreams = _upstreams.Skip(skip).Concat(_upstreams.Take(skip));
             }
             else // failover
             {
