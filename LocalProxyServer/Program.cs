@@ -6,7 +6,7 @@ namespace LocalProxyServer
 {
     public class Program
     {
-        private static UpstreamProcessManager? _upstreamProcess;
+        private static List<UpstreamProcessManager> _upstreamProcesses = new();
         private static ProxyServer? _proxy;
         private static CrlServer? _crlServer;
         private static ILogger<Program>? _programLogger;
@@ -40,34 +40,44 @@ namespace LocalProxyServer
             // Handle graceful shutdown
             var cts = new CancellationTokenSource();
 
-            // Setup upstream
-            string? upstreamHost = null;
-            int upstreamPort = 0;
-            string upstreamType = "direct";
-            
-            if (proxyConfig.Upstream?.Enabled == true)
+            // Setup upstreams
+            var activeUpstreams = new List<UpstreamConfiguration>();
+
+            // Merge legacy Upstream and new Upstreams list
+            var allUpstreams = new List<UpstreamConfiguration>();
+            if (proxyConfig.Upstream != null)
             {
-                upstreamType = proxyConfig.Upstream.Type.ToLowerInvariant();
-                upstreamHost = proxyConfig.Upstream.Host;
-                upstreamPort = proxyConfig.Upstream.Port;
+                allUpstreams.Add(proxyConfig.Upstream);
+            }
+            if (proxyConfig.Upstreams != null)
+            {
+                allUpstreams.AddRange(proxyConfig.Upstreams);
+            }
 
-                _programLogger.LogInformation("Upstream {Type} proxy enabled: {Host}:{Port}",
-                    upstreamType.ToUpper(), upstreamHost, upstreamPort);
-
-                // Start upstream process if configured
-                if (proxyConfig.Upstream.Process != null)
+            foreach (var upstream in allUpstreams)
+            {
+                if (upstream.Enabled)
                 {
-                    var processLogger = loggerFactory.CreateLogger<UpstreamProcessManager>();
-                    _upstreamProcess = new UpstreamProcessManager(proxyConfig.Upstream.Process, processLogger);
-                    
-                    var started = await _upstreamProcess.StartAsync(cts.Token);
-                    if (!started)
+                    activeUpstreams.Add(upstream);
+                    _programLogger.LogInformation("Upstream {Type} proxy enabled: {Host}:{Port}",
+                        upstream.Type.ToUpperInvariant(), upstream.Host, upstream.Port);
+
+                    if (upstream.Process != null)
                     {
-                        _programLogger.LogError("Failed to start upstream process. Proxy may not work correctly");
+                        var processLogger = loggerFactory.CreateLogger<UpstreamProcessManager>();
+                        var processManager = new UpstreamProcessManager(upstream.Process, processLogger);
+                        _upstreamProcesses.Add(processManager);
+
+                        var started = await processManager.StartAsync(cts.Token);
+                        if (!started)
+                        {
+                            _programLogger.LogError("Failed to start upstream process. Proxy to {Host}:{Port} may not work correctly", upstream.Host, upstream.Port);
+                        }
                     }
                 }
             }
-            else
+
+            if (activeUpstreams.Count == 0)
             {
                 _programLogger.LogInformation("No upstream proxy configured, using direct connection");
             }
@@ -101,7 +111,7 @@ namespace LocalProxyServer
             }
 
             // Start proxy server
-            _proxy = new ProxyServer(proxyConfig.Port, upstreamHost, upstreamPort, upstreamType, cert, logger);
+            _proxy = new ProxyServer(proxyConfig.Port, activeUpstreams, proxyConfig.LoadBalancingStrategy, cert, logger);
             
             var proxyTask = _proxy.StartAsync();
 
@@ -153,13 +163,16 @@ namespace LocalProxyServer
                 _programLogger?.LogError(ex, "Error stopping CRL server");
             }
 
-            try
+            foreach (var process in _upstreamProcesses)
             {
-                _upstreamProcess?.Stop();
-            }
-            catch (Exception ex)
-            {
-                _programLogger?.LogError(ex, "Error stopping upstream process");
+                try
+                {
+                    process.Stop();
+                }
+                catch (Exception ex)
+                {
+                    _programLogger?.LogError(ex, "Error stopping upstream process");
+                }
             }
             
             _programLogger?.LogInformation("LocalProxyServer stopped");

@@ -21,9 +21,19 @@ namespace LocalProxyServer
         public int CrlPort { get; set; } = 8081;
 
         /// <summary>
-        /// Upstream proxy configuration.
+        /// Upstream proxy configuration (legacy, use Upstreams instead).
         /// </summary>
         public UpstreamConfiguration? Upstream { get; set; }
+
+        /// <summary>
+        /// List of upstream proxy configurations.
+        /// </summary>
+        public List<UpstreamConfiguration>? Upstreams { get; set; }
+
+        /// <summary>
+        /// Load balancing strategy when multiple upstreams are configured ("failover" or "roundRobin").
+        /// </summary>
+        public string LoadBalancingStrategy { get; set; } = "failover";
     }
 
     /// <summary>

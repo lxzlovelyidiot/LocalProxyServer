@@ -10,26 +10,25 @@ namespace LocalProxyServer
     public class ProxyServer
     {
         private readonly int _port;
-        private readonly string? _upstreamHost;
-        private readonly int _upstreamPort;
-        private readonly string _upstreamType;
+        private readonly IReadOnlyList<UpstreamConfiguration> _upstreams;
+        private readonly string _loadBalancingStrategy;
         private readonly X509Certificate2? _serverCertificate;
+        private int _roundRobinIndex = 0;
         private readonly ILogger<ProxyServer> _logger;
         private TcpListener? _listener;
         private bool _isRunning;
 
         public ProxyServer(
             int port, 
-            string? upstreamHost = null, 
-            int upstreamPort = 0,
-            string upstreamType = "direct",
+            IEnumerable<UpstreamConfiguration>? upstreams = null, 
+            string loadBalancingStrategy = "failover",
             X509Certificate2? serverCertificate = null,
             ILogger<ProxyServer>? logger = null)
         {
             _port = port;
-            _upstreamHost = upstreamHost;
-            _upstreamPort = upstreamPort;
-            _upstreamType = upstreamType.ToLowerInvariant();
+            var upstreamList = upstreams?.ToList() ?? new List<UpstreamConfiguration>();
+            _upstreams = upstreamList.Where(u => u.Enabled).ToList();
+            _loadBalancingStrategy = loadBalancingStrategy.ToLowerInvariant();
             _serverCertificate = serverCertificate;
             _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ProxyServer>.Instance;
         }
@@ -55,11 +54,10 @@ namespace LocalProxyServer
             {
                 _logger.LogInformation("HTTPS proxy support enabled (TLS to Proxy)");
             }
-            
-            if (!string.IsNullOrEmpty(_upstreamHost))
+            if (_upstreams.Count > 0)
             {
-                _logger.LogInformation("Using upstream {Type} proxy: {Host}:{Port}", 
-                    _upstreamType.ToUpper(), _upstreamHost, _upstreamPort);
+                _logger.LogInformation("Using {Count} upstream proxies with strategy '{Strategy}'", 
+                    _upstreams.Count, _loadBalancingStrategy);
             }
 
             while (_isRunning)
@@ -452,36 +450,72 @@ namespace LocalProxyServer
 
         private async Task<TcpClient> ConnectToUpstreamAsync(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
         {
-            if (string.IsNullOrEmpty(_upstreamHost))
+            if (_upstreams.Count == 0)
             {
                 // Direct connection
                 _logger.LogDebug("Connecting directly to {Host}:{Port}", targetHost, targetPort);
                 return await TcpClientConnector.ConnectAsync(targetHost, targetPort, preferredAddressFamily);
             }
 
-            return _upstreamType switch
+            IEnumerable<UpstreamConfiguration> selectedUpstreams;
+
+            if (_loadBalancingStrategy == "roundrobin")
             {
-                "socks5" => await ConnectViaSocks5Async(targetHost, targetPort, preferredAddressFamily),
-                "http" => await ConnectViaHttpAsync(targetHost, targetPort, preferredAddressFamily),
-                _ => throw new NotSupportedException($"Upstream type '{_upstreamType}' is not supported")
-            };
+                int index = Interlocked.Increment(ref _roundRobinIndex);
+                if (index < 0) {
+                    Interlocked.Exchange(ref _roundRobinIndex, 0);
+                    index = 0;
+                }
+                // Start with the selected one, then failover to others if needed
+                selectedUpstreams = _upstreams.Skip(index % _upstreams.Count)
+                    .Concat(_upstreams.Take(index % _upstreams.Count));
+            }
+            else // failover
+            {
+                selectedUpstreams = _upstreams;
+            }
+
+            List<Exception> exceptions = new();
+
+            foreach (var upstream in selectedUpstreams)
+            {
+                if (string.IsNullOrEmpty(upstream.Host))
+                    continue;
+
+                try
+                {
+                    return upstream.Type.ToLowerInvariant() switch
+                    {
+                        "socks5" => await ConnectViaSocks5Async(targetHost, targetPort, upstream, preferredAddressFamily),
+                        "http" => await ConnectViaHttpAsync(targetHost, targetPort, upstream, preferredAddressFamily),
+                        _ => throw new NotSupportedException($"Upstream type '{upstream.Type}' is not supported")
+                    };
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to connect to upstream {Type} proxy {Host}:{Port}", upstream.Type, upstream.Host, upstream.Port);
+                    exceptions.Add(ex);
+                }
+            }
+
+            throw new AggregateException($"Failed to connect to any upstream proxy for destination {targetHost}:{targetPort}", exceptions);
         }
 
-        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
+        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort, UpstreamConfiguration upstream, AddressFamily? preferredAddressFamily)
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via SOCKS5 {UpstreamHost}:{UpstreamPort}",
-                targetHost, targetPort, _upstreamHost, _upstreamPort);
+                targetHost, targetPort, upstream.Host, upstream.Port);
             
-            var socks = new Socks5Client(_upstreamHost!, _upstreamPort, _logger, preferredAddressFamily);
+            var socks = new Socks5Client(upstream.Host!, upstream.Port, _logger, preferredAddressFamily);
             return await socks.ConnectAsync(targetHost, targetPort);
         }
 
-        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
+        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort, UpstreamConfiguration upstream, AddressFamily? preferredAddressFamily)
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via HTTP proxy {UpstreamHost}:{UpstreamPort}",
-                targetHost, targetPort, _upstreamHost, _upstreamPort);
+                targetHost, targetPort, upstream.Host, upstream.Port);
             
-            var httpProxy = new HttpProxyClient(_upstreamHost!, _upstreamPort, _logger, preferredAddressFamily);
+            var httpProxy = new HttpProxyClient(upstream.Host!, upstream.Port, _logger, preferredAddressFamily);
             return await httpProxy.ConnectAsync(targetHost, targetPort);
         }
 

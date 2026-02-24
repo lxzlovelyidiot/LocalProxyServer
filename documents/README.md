@@ -196,6 +196,136 @@ npm config delete proxy
 npm config delete https-proxy
 ```
 
+## Upstream Proxy Configuration
+
+### Overview
+
+Outbound traffic can be routed through one or more upstream proxies (SOCKS5 or HTTP). When no upstream is configured, the proxy connects directly to target hosts.
+
+### Single Upstream
+
+```json
+{
+  "Proxy": {
+    "Upstreams": [
+      {
+        "Enabled": true,
+        "Type": "socks5",
+        "Host": "localhost",
+        "Port": 1080
+      }
+    ]
+  }
+}
+```
+
+Supported upstream types:
+
+| `Type`   | Description                             |
+|----------|-----------------------------------------|
+| `socks5` | SOCKS5 proxy (e.g., SSH dynamic tunnel) |
+| `http`   | HTTP CONNECT proxy                      |
+
+### Multiple Upstreams & Load Balancing
+
+When multiple entries are present, the proxy selects among them using the `LoadBalancingStrategy` setting.
+
+```json
+{
+  "Proxy": {
+    "LoadBalancingStrategy": "failover",
+    "Upstreams": [
+      {
+        "Enabled": true,
+        "Type": "socks5",
+        "Host": "localhost",
+        "Port": 1080
+      },
+      {
+        "Enabled": true,
+        "Type": "socks5",
+        "Host": "localhost",
+        "Port": 1081
+      },
+      {
+        "Enabled": false,
+        "Type": "http",
+        "Host": "proxy.example.com",
+        "Port": 3128
+      }
+    ]
+  }
+}
+```
+
+`Enabled: false` entries are skipped entirely and can be kept in the configuration for future use without removing them.
+
+#### Load Balancing Strategies
+
+| Strategy     | Behavior                                                                                     |
+|--------------|----------------------------------------------------------------------------------------------|
+| `failover`   | *(default)* Try upstreams in order; automatically fall back to the next one on failure.      |
+| `roundRobin` | Distribute connections across upstreams in rotation; falls over to the next one on failure.  |
+
+### Upstream Process Auto-Start
+
+Each upstream entry can include a `Process` block to automatically start a local process (e.g., an SSH tunnel) when the server starts.
+
+```json
+{
+  "Enabled": true,
+  "Type": "socks5",
+  "Host": "localhost",
+  "Port": 1080,
+  "Process": {
+    "AutoStart": true,
+    "FileName": "ssh.exe",
+    "Arguments": "root@proxy.host -D 1080 -i private.key",
+    "WorkingDirectory": "%OneDrive%\\TOOLS\\SSHKEY",
+    "StartupDelayMs": 1000,
+    "RedirectOutput": false,
+    "AutoRestart": true,
+    "MaxRestartAttempts": 10,
+    "RestartDelayMs": 3000
+  }
+}
+```
+
+All path and argument fields support environment variable expansion (e.g., `%USERPROFILE%`, `%OneDrive%`, `%ProgramFiles%`).
+
+#### Process Configuration Reference
+
+| Field                | Type   | Default | Description                                                              |
+|----------------------|--------|---------|--------------------------------------------------------------------------|
+| `AutoStart`          | bool   | `false` | Start the process automatically on server launch.                        |
+| `FileName`           | string | —       | Path to the executable. Supports environment variables.                  |
+| `Arguments`          | string | —       | Command-line arguments. Supports environment variables.                  |
+| `WorkingDirectory`   | string | —       | Working directory for the process. Supports environment variables.       |
+| `StartupDelayMs`     | int    | `1000`  | Milliseconds to wait after process start before using the upstream.      |
+| `RedirectOutput`     | bool   | `true`  | Capture and log the process's stdout/stderr.                             |
+| `AutoRestart`        | bool   | `true`  | Automatically restart the process if it exits unexpectedly.              |
+| `MaxRestartAttempts` | int    | `5`     | Maximum restart attempts. `0` = unlimited (suitable for 24/7 operation). |
+| `RestartDelayMs`     | int    | `3000`  | Milliseconds to wait before each restart attempt.                        |
+
+On Windows, all managed upstream processes are added to a [Job Object](JOB_OBJECTS_SUMMARY.md) and are terminated automatically when the proxy server exits.
+
+### Troubleshooting: Upstream Process Failed to Start
+
+Check the logs for the following messages:
+
+```
+[Error] Failed to start upstream process
+[Error] Cannot start upstream process: FileName is not configured
+```
+
+Steps to resolve:
+1. Verify the `FileName` path is correct.
+2. Check that environment variables expand to the expected values.
+3. Run the command manually in a terminal to confirm it works.
+4. Set `RedirectOutput: true` to capture the process's own error output.
+
+See also: [Auto-restart Feature](AUTO_RESTART.md), [Windows Job Objects](JOB_OBJECTS.md)
+
 ## Certificate Management (HTTPS Mode)
 
 ### Automatic Installation
@@ -273,19 +403,15 @@ netstat -an | findstr "8443"
 type appsettings.json
 ```
 
-### Issue 4: Upstream Process Failed to Start
+### Issue 4: Upstream Proxy Unreachable
 
-**Check logs:**
-```
-[Error] Failed to start upstream process
-[Error] Cannot start upstream process: FileName is not configured
-```
+**Cause:** All configured upstream proxies failed to accept the connection.
 
-**Solution:**
-1. Check if `FileName` path is correct
-2. Check if environment variables expand correctly
-3. Test command manually
-4. View detailed error logs
+**Check:**
+- Verify the upstream service is running (e.g., SSH tunnel, SOCKS5 proxy).
+- Confirm `Host` and `Port` in the `Upstreams` configuration are correct.
+- If using `Process.AutoStart`, see [Upstream Process Auto-Start](#upstream-process-auto-start) for troubleshooting steps.
+- Increase log verbosity (`"LocalProxyServer": "Debug"`) to see per-upstream failure details.
 
 ## Performance Tuning
 
@@ -339,6 +465,7 @@ Modify `appsettings.json`:
 
 ## Additional Documentation
 
+- [Upstream Proxy Configuration & Multi-Upstream Setup](#upstream-proxy-configuration)
 - [Process Management and Auto-restart](PROCESS_CLEANUP.md)
 - [Auto-restart Feature](AUTO_RESTART.md)
 - [Windows Job Objects (Process Cleanup)](JOB_OBJECTS.md)
