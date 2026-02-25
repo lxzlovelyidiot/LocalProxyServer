@@ -16,7 +16,7 @@ namespace LocalProxyServer
         private int _roundRobinIndex = 0;
         private readonly ILogger<ProxyServer> _logger;
         private TcpListener? _listener;
-        private bool _isRunning;
+        private volatile bool _isRunning;
 
         public ProxyServer(
             int port, 
@@ -294,39 +294,26 @@ namespace LocalProxyServer
 
             _logger.LogInformation("CONNECT request from {Client} to {Host}:{Port}", clientEndpoint, host, port);
 
-            TcpClient? upstreamClient = null;
             try
             {
-                upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
+                using var upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
+                using var upstreamStream = upstreamClient.GetStream();
 
                 _logger.LogInformation("Tunnel established: {Client} <-> {Host}:{Port}", clientEndpoint, host, port);
 
-                using (upstreamClient)
-                using (var upstreamStream = upstreamClient.GetStream())
-                {
-                    // Send 200 Connection Established to client
-                    var response = "HTTP/1.1 200 Connection Established\r\n\r\n";
-                    await clientStream.WriteAsync(Encoding.ASCII.GetBytes(response));
+                // Send 200 Connection Established to client
+                var response = "HTTP/1.1 200 Connection Established\r\n\r\n";
+                await clientStream.WriteAsync(Encoding.ASCII.GetBytes(response));
 
-                    // Track data transfer
-                    var clientToServer = CopyWithLoggingAsync(clientStream, upstreamStream, 
-                        $"{clientEndpoint} -> {host}:{port}");
-                    var serverToClient = CopyWithLoggingAsync(upstreamStream, clientStream, 
-                        $"{host}:{port} -> {clientEndpoint}");
+                // Track data transfer
+                await RelayBidirectionalAsync(clientStream, upstreamStream, clientEndpoint, $"{host}:{port}");
 
-                    await Task.WhenAll(clientToServer, serverToClient);
-                }
-                
                 _logger.LogInformation("Tunnel closed: {Client} <-> {Host}:{Port}", clientEndpoint, host, port);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error handling CONNECT to {Host}:{Port} from {Client}", host, port, clientEndpoint);
                 throw;
-            }
-            finally
-            {
-                upstreamClient?.Dispose();
             }
         }
 
@@ -381,49 +368,60 @@ namespace LocalProxyServer
             _logger.LogInformation("HTTP request from {Client} to {Host}:{Port} {Path}", 
                 clientEndpoint, host, port, pathAndQuery);
 
-            TcpClient? upstreamClient = null;
             try
             {
-                upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
+                using var upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
+                using var upstreamStream = upstreamClient.GetStream();
 
-                using (upstreamClient)
-                using (var upstreamStream = upstreamClient.GetStream())
+                // Forward the first line but with relative path
+                var protocol = parts.Length > 2 ? parts[2] : "HTTP/1.1";
+                var newFirstLine = $"{parts[0]} {pathAndQuery} {protocol}\r\n";
+                await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(newFirstLine));
+
+                // Forward remaining headers
+                foreach (var h in headers)
                 {
-                    // Forward the first line but with relative path
-                    var protocol = parts.Length > 2 ? parts[2] : "HTTP/1.1";
-                    var newFirstLine = $"{parts[0]} {pathAndQuery} {protocol}\r\n";
-                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(newFirstLine));
-
-                    // Forward remaining headers
-                    foreach (var h in headers)
-                    {
-                        await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(h + "\r\n"));
-                    }
-                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes("\r\n"));
-
-                    _logger.LogInformation("HTTP proxy established: {Client} <-> {Host}:{Port}", 
-                        clientEndpoint, host, port);
-
-                    // Tunnel remaining traffic (body and response)
-                    await Task.WhenAll(
-                        clientStream.CopyToAsync(upstreamStream),
-                        upstreamStream.CopyToAsync(clientStream)
-                    );
+                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(h + "\r\n"));
                 }
+                await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes("\r\n"));
+
+                _logger.LogInformation("HTTP proxy established: {Client} <-> {Host}:{Port}",
+                    clientEndpoint, host, port);
+
+                // Tunnel remaining traffic (body and response)
+                await RelayBidirectionalAsync(clientStream, upstreamStream, clientEndpoint, $"{host}:{port}");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling HTTP request to {Host}:{Port} from {Client}", 
+                _logger.LogError(ex, "Error handling HTTP request to {Host}:{Port} from {Client}",
                     host, port, clientEndpoint);
                 throw;
             }
-            finally
-            {
-                upstreamClient?.Dispose();
-            }
         }
 
-        private async Task CopyWithLoggingAsync(Stream source, Stream destination, string direction)
+        private async Task RelayBidirectionalAsync(Stream clientStream, Stream upstreamStream, string clientLabel, string upstreamLabel)
+        {
+            using var cts = new CancellationTokenSource();
+
+            async Task RelayAsync(Stream from, Stream to, string direction)
+            {
+                try
+                {
+                    await CopyWithLoggingAsync(from, to, direction, cts.Token);
+                }
+                finally
+                {
+                    // Signal the other direction to stop regardless of how this one ended.
+                    cts.Cancel();
+                }
+            }
+
+            await Task.WhenAll(
+                RelayAsync(clientStream, upstreamStream, $"{clientLabel} -> {upstreamLabel}"),
+                RelayAsync(upstreamStream, clientStream, $"{upstreamLabel} -> {clientLabel}"));
+        }
+
+        private async Task CopyWithLoggingAsync(Stream source, Stream destination, string direction, CancellationToken cancellationToken = default)
         {
             var buffer = new byte[81920]; // 80KB buffer
             long totalBytes = 0;
@@ -431,18 +429,24 @@ namespace LocalProxyServer
 
             try
             {
-                while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                while ((bytesRead = await source.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
                 {
-                    await destination.WriteAsync(buffer, 0, bytesRead);
+                    await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
                     totalBytes += bytesRead;
                 }
-                
-                _logger.LogDebug("Transfer completed {Direction}: {TotalBytes} bytes", 
+
+                _logger.LogDebug("Transfer completed {Direction}: {TotalBytes} bytes",
+                    direction, totalBytes);
+            }
+            catch (OperationCanceledException)
+            {
+                // The other relay direction ended first; this is expected and not an error.
+                _logger.LogDebug("Transfer cancelled {Direction} after {TotalBytes} bytes",
                     direction, totalBytes);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Transfer ended {Direction} after {TotalBytes} bytes", 
+                _logger.LogDebug(ex, "Transfer ended {Direction} after {TotalBytes} bytes",
                     direction, totalBytes);
                 throw;
             }
