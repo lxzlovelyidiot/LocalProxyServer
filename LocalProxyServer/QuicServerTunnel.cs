@@ -106,6 +106,8 @@ public static class QuicServerTunnel
                 DefaultCloseErrorCode = 0,
                 MaxInboundBidirectionalStreams = 100,
                 MaxInboundUnidirectionalStreams = 0,
+                IdleTimeout = TimeSpan.FromSeconds(60),
+                KeepAliveInterval = TimeSpan.FromSeconds(20),
                 ServerAuthenticationOptions = new SslServerAuthenticationOptions
                 {
                     ApplicationProtocols = new List<SslApplicationProtocol> { new SslApplicationProtocol("tunnel") },

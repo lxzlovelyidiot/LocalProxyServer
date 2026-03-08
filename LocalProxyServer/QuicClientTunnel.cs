@@ -52,31 +52,59 @@ public static class QuicClientTunnel
             }
         }
 
-        await using var connection = await QuicConnection.ConnectAsync(new QuicClientConnectionOptions
+        int retryDelay = 1000;
+        while (true)
         {
-            DefaultStreamErrorCode = 0,
-            DefaultCloseErrorCode = 0,
-            MaxInboundUnidirectionalStreams = 0,
-            MaxInboundBidirectionalStreams = 10,
-            RemoteEndPoint = endpoint,
-            ClientAuthenticationOptions = new SslClientAuthenticationOptions
+            try
             {
-                ApplicationProtocols = new List<SslApplicationProtocol> { new SslApplicationProtocol("tunnel") },
-                RemoteCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
+                Console.WriteLine($"Connecting to {endpoint}...");
+                await using var connection = await QuicConnection.ConnectAsync(new QuicClientConnectionOptions
+                {
+                    DefaultStreamErrorCode = 0,
+                    DefaultCloseErrorCode = 0,
+                    MaxInboundUnidirectionalStreams = 0,
+                    MaxInboundBidirectionalStreams = 10,
+                    RemoteEndPoint = endpoint,
+                    IdleTimeout = TimeSpan.FromSeconds(60),
+                    KeepAliveInterval = TimeSpan.FromSeconds(20),
+                    ClientAuthenticationOptions = new SslClientAuthenticationOptions
+                    {
+                        ApplicationProtocols = new List<SslApplicationProtocol> { new SslApplicationProtocol("tunnel") },
+                        RemoteCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
+                    }
+                });
+
+                Console.WriteLine("Connected. Opening tunnel stream...");
+
+                // Open bidirectional stream
+                await using var stream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional);
+
+                Console.WriteLine("Tunnel stream opened. Ready.");
+                retryDelay = 1000; // Reset retry delay on success
+
+                // Standard input/output streams
+                using var stdin = Console.OpenStandardInput();
+                using var stdout = Console.OpenStandardOutput();
+
+                // Copy input to QUIC stream, and QUIC stream to output concurrently
+                var copyToQuicTask = stdin.CopyToAsync(stream);
+                var copyFromQuicTask = stream.CopyToAsync(stdout);
+
+                await Task.WhenAny(copyToQuicTask, copyFromQuicTask);
+                Console.WriteLine("Tunnel stream closed or connection lost.");
             }
-        });
+            catch (QuicException ex)
+            {
+                Console.Error.WriteLine($"QUIC Error: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error: {ex.Message}");
+            }
 
-        // Open bidirectional stream
-        await using var stream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional);
-
-        // Standard input/output streams
-        using var stdin = Console.OpenStandardInput();
-        using var stdout = Console.OpenStandardOutput();
-
-        // Copy input to QUIC stream, and QUIC stream to output concurrently
-        var copyToQuicTask = stdin.CopyToAsync(stream);
-        var copyFromQuicTask = stream.CopyToAsync(stdout);
-
-        await Task.WhenAny(copyToQuicTask, copyFromQuicTask);
+            Console.WriteLine($"Retrying in {retryDelay / 1000}s...");
+            await Task.Delay(retryDelay);
+            retryDelay = Math.Min(retryDelay * 2, 30000); // Exponential backoff up to 30s
+        }
     }
 }
