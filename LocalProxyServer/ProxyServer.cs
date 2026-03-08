@@ -3,6 +3,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+
 using Microsoft.Extensions.Logging;
 
 namespace LocalProxyServer
@@ -19,8 +20,8 @@ namespace LocalProxyServer
         private volatile bool _isRunning;
 
         public ProxyServer(
-            int port, 
-            IEnumerable<UpstreamConfiguration>? upstreams = null, 
+            int port,
+            IEnumerable<UpstreamConfiguration>? upstreams = null,
             string loadBalancingStrategy = "failover",
             X509Certificate2? serverCertificate = null,
             ILogger<ProxyServer>? logger = null)
@@ -49,14 +50,14 @@ namespace LocalProxyServer
             _listener.Start();
             _isRunning = true;
             _logger.LogInformation("Proxy server started on port {Port}", _port);
-            
+
             if (_serverCertificate != null)
             {
                 _logger.LogInformation("HTTPS proxy support enabled (TLS to Proxy)");
             }
             if (_upstreams.Count > 0)
             {
-                _logger.LogInformation("Using {Count} upstream proxies with strategy '{Strategy}'", 
+                _logger.LogInformation("Using {Count} upstream proxies with strategy '{Strategy}'",
                     _upstreams.Count, _loadBalancingStrategy);
             }
 
@@ -69,7 +70,7 @@ namespace LocalProxyServer
                 }
                 catch (Exception ex)
                 {
-                    if (_isRunning) 
+                    if (_isRunning)
                         _logger.LogError(ex, "Error accepting client");
                 }
             }
@@ -81,7 +82,7 @@ namespace LocalProxyServer
             var clientAddressFamily = remoteEndPoint?.AddressFamily;
             var clientEndpoint = remoteEndPoint?.ToString() ?? "unknown";
             _logger.LogInformation("New client connection from {Endpoint}", clientEndpoint);
-            
+
             Stream? finalStream = null;
             try
             {
@@ -200,7 +201,7 @@ namespace LocalProxyServer
             return (prefixedStream, isTls);
         }
 
-        private sealed class PrefixedStream : Stream
+        private sealed class PrefixedStream: Stream
         {
             private readonly Stream _inner;
             private ReadOnlyMemory<byte> _prefix;
@@ -322,7 +323,7 @@ namespace LocalProxyServer
             // Simple HTTP proxying
             var parts = firstLine.Split(' ');
             var url = parts[1];
-            
+
             string host;
             int port;
             string pathAndQuery;
@@ -365,7 +366,7 @@ namespace LocalProxyServer
                 return;
             }
 
-            _logger.LogInformation("HTTP request from {Client} to {Host}:{Port} {Path}", 
+            _logger.LogInformation("HTTP request from {Client} to {Host}:{Port} {Path}",
                 clientEndpoint, host, port, pathAndQuery);
 
             try
@@ -506,7 +507,7 @@ namespace LocalProxyServer
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via SOCKS5 {UpstreamHost}:{UpstreamPort}",
                 targetHost, targetPort, upstream.Host, upstream.Port);
-            
+
             var socks = new Socks5Client(upstream.Host!, upstream.Port, _logger, preferredAddressFamily);
             return await socks.ConnectAsync(targetHost, targetPort);
         }
@@ -515,7 +516,7 @@ namespace LocalProxyServer
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via HTTP proxy {UpstreamHost}:{UpstreamPort}",
                 targetHost, targetPort, upstream.Host, upstream.Port);
-            
+
             var httpProxy = new HttpProxyClient(upstream.Host!, upstream.Port, _logger, preferredAddressFamily);
             return await httpProxy.ConnectAsync(targetHost, targetPort);
         }

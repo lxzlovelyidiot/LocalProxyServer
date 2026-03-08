@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
 using Microsoft.Win32.SafeHandles;
 
 namespace LocalProxyServer
@@ -9,7 +10,7 @@ namespace LocalProxyServer
     /// This solves the issue where closing the console window leaves upstream processes running.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    public class JobObject : IDisposable
+    public class JobObject: IDisposable
     {
         private SafeJobHandle? _jobHandle;
         private bool _disposed;
@@ -35,7 +36,7 @@ namespace LocalProxyServer
 
             int length = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
             IntPtr extendedInfoPtr = Marshal.AllocHGlobal(length);
-            
+
             try
             {
                 Marshal.StructureToPtr(extendedInfo, extendedInfoPtr, false);
@@ -146,7 +147,7 @@ namespace LocalProxyServer
             public UIntPtr PeakJobMemoryUsed;
         }
 
-        private class SafeJobHandle : SafeHandleZeroOrMinusOneIsInvalid
+        private class SafeJobHandle: SafeHandleZeroOrMinusOneIsInvalid
         {
             public SafeJobHandle() : base(true) { }
 

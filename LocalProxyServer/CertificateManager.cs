@@ -133,7 +133,8 @@ namespace LocalProxyServer
                 {
                     store.Open(OpenFlags.ReadWrite);
                     var found = store.Certificates.Find(X509FindType.FindByThumbprint, cert.Thumbprint, false);
-                    foreach (var c in found) store.Remove(c);
+                    foreach (var c in found)
+                        store.Remove(c);
                 }
             }
             catch { /* May require administrator privileges */ }
@@ -143,7 +144,8 @@ namespace LocalProxyServer
                 {
                     store.Open(OpenFlags.ReadWrite);
                     var found = store.Certificates.Find(X509FindType.FindByThumbprint, cert.Thumbprint, false);
-                    foreach (var c in found) store.Remove(c);
+                    foreach (var c in found)
+                        store.Remove(c);
                 }
             }
             catch { }
@@ -188,7 +190,8 @@ namespace LocalProxyServer
             var existing = store.Certificates.Find(X509FindType.FindBySubjectName, ServerName, false);
             foreach (var c in existing)
             {
-                if (c.Issuer != rootCa.Subject || !IsSignedBy(c, rootCa)) continue;
+                if (c.Issuer != rootCa.Subject || !IsSignedBy(c, rootCa))
+                    continue;
                 // CRL is enabled but existing server cert has no CRL distribution point → Remove and regenerate
                 if (!string.IsNullOrEmpty(crlDistributionUrl) && !HasCrlDistributionPoints(c))
                 {
@@ -246,7 +249,7 @@ namespace LocalProxyServer
 
             // Copy with private key
             var finalCert = cert.CopyWithPrivateKey(rsa);
-            
+
             // Export and import to make it persistent and usable by SslStream
             var pfx = finalCert.Export(X509ContentType.Pfx);
             var persistentCert = X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);

@@ -20,7 +20,11 @@ namespace LocalProxyServer
         {
             _port = port;
             _crlDer = crlDer;
-            _path = path.TrimEnd('/') switch { "" => "/", var p => p };
+            _path = path.TrimEnd('/') switch
+            {
+                "" => "/",
+                var p => p
+            };
         }
 
         public void Start()
@@ -36,8 +40,16 @@ namespace LocalProxyServer
         public void Stop()
         {
             _cts?.Cancel();
-            try { _listener?.Stop(); } catch { }
-            try { _runTask?.GetAwaiter().GetResult(); } catch { }
+            try
+            {
+                _listener?.Stop();
+            }
+            catch { }
+            try
+            {
+                _runTask?.GetAwaiter().GetResult();
+            }
+            catch { }
         }
 
         private async Task RunAsync(CancellationToken cancel)
@@ -72,9 +84,11 @@ namespace LocalProxyServer
             try
             {
                 var path = request.Url?.AbsolutePath.TrimEnd('/') ?? "";
-                if (path == "" || path == "/") path = "/";
+                if (path == "" || path == "/")
+                    path = "/";
                 var wantPath = _path.TrimEnd('/');
-                if (wantPath == "") wantPath = "/";
+                if (wantPath == "")
+                    wantPath = "/";
                 if (!path.Equals(wantPath, StringComparison.OrdinalIgnoreCase))
                 {
                     response.StatusCode = 404;

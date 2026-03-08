@@ -45,6 +45,19 @@ curl -x http://localhost:8443 https://www.google.com
 curl -x https://[::1]:8443 --proxy-insecure https://www.google.com
 ```
 
+## Tunneling Mode (SSH Proxy)
+
+### Server (Host)
+```bash
+# Listen on 9090, forward to SSH
+localproxyserver server tunnel --listen 9090 --forward 22
+```
+
+### Client (SSH Config)
+```bash
+ssh user@remote -o ProxyCommand="localproxyserver client tunnel --server HOST_IP:9090"
+```
+
 ## Configuration Comparison
 
 | Feature | HTTP (8080) | HTTPS (8443) |

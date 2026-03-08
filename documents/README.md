@@ -482,6 +482,38 @@ type appsettings.json
 - If using `Process.AutoStart`, see [Upstream Process Auto-Start](#upstream-process-auto-start) for troubleshooting steps.
 - Increase log verbosity (`"LocalProxyServer": "Debug"`) to see per-upstream failure details.
 
+## QUIC Tunneling (Beta)
+
+`LocalProxyServer` includes a high-performance tunneling mode based on `System.Net.Quic`, designed primarily to serve as a transport for `ssh --ProxyCommand`. 
+
+### Server Mode
+Listen for QUIC connections and forward bidirectional streams to a local TCP port.
+
+```bash
+# Listen on all interfaces on port 9090, forward to local SSH (port 22)
+localproxyserver server tunnel --listen 9090 --forward 22
+
+# Bind to specific IP
+localproxyserver server tunnel --listen 127.0.0.1:9090 --forward 127.0.0.1:22
+```
+
+### Client Mode
+Connect to a QUIC tunnel server and bridge the connection to `stdin`/`stdout`.
+
+```bash
+# Connect to server on localhost:9090
+localproxyserver client tunnel --server 9090
+
+# Usage with SSH
+ssh user@target -o ProxyCommand="localproxyserver client tunnel --server HOST_IP:9090"
+```
+
+### Features
+- **UDP Based**: Uses QUIC (UDP) for better performance in lossy network conditions.
+- **TLS 1.3**: Fully encrypted transport using the built-in certificate management system.
+- **Zero Configuration**: Supports optional IPs, defaulting to loopback or any-interface as appropriate.
+- **Standard-Ready**: Compatible with any pipeline that communicates over standard input/output.
+
 ## Performance Tuning
 
 ### Connection Limit

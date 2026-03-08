@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+
 using Microsoft.Extensions.Logging;
 
 namespace LocalProxyServer
@@ -8,7 +9,7 @@ namespace LocalProxyServer
     /// Manages the lifecycle of an upstream proxy process.
     /// Uses Windows Job Objects to ensure process termination when parent exits.
     /// </summary>
-    public class UpstreamProcessManager : IDisposable
+    public class UpstreamProcessManager: IDisposable
     {
         private readonly UpstreamProcessConfiguration _config;
         private readonly HealthCheckConfiguration? _healthCheckConfig;
@@ -72,14 +73,14 @@ namespace LocalProxyServer
             {
                 // Expand environment variables in configuration
                 var fileName = Environment.ExpandEnvironmentVariables(_config.FileName);
-                var arguments = string.IsNullOrEmpty(_config.Arguments) 
-                    ? "" 
+                var arguments = string.IsNullOrEmpty(_config.Arguments)
+                    ? ""
                     : Environment.ExpandEnvironmentVariables(_config.Arguments);
                 var workingDirectory = string.IsNullOrEmpty(_config.WorkingDirectory)
                     ? ""
                     : Environment.ExpandEnvironmentVariables(_config.WorkingDirectory);
 
-                _logger?.LogInformation("Starting upstream process: {FileName} {Arguments}", 
+                _logger?.LogInformation("Starting upstream process: {FileName} {Arguments}",
                     fileName, arguments);
 
                 if (!string.IsNullOrEmpty(workingDirectory))
@@ -160,16 +161,16 @@ namespace LocalProxyServer
                 // Wait for startup delay
                 if (_config.StartupDelayMs > 0)
                 {
-                    _logger?.LogDebug("Waiting {Delay}ms for upstream process to initialize", 
+                    _logger?.LogDebug("Waiting {Delay}ms for upstream process to initialize",
                         _config.StartupDelayMs);
-                    
+
                     await Task.Delay(_config.StartupDelayMs, cancellationToken);
                 }
 
                 // Check if process is still running
                 if (_process.HasExited)
                 {
-                    _logger?.LogError("Upstream process exited immediately with code {ExitCode}", 
+                    _logger?.LogError("Upstream process exited immediately with code {ExitCode}",
                         _process.ExitCode);
                     return false;
                 }
@@ -219,7 +220,7 @@ namespace LocalProxyServer
                         // Check if we should restart
                         if (_config.MaxRestartAttempts > 0 && _restartAttempts >= _config.MaxRestartAttempts)
                         {
-                            _logger?.LogError("Maximum restart attempts ({Max}) reached. Giving up", 
+                            _logger?.LogError("Maximum restart attempts ({Max}) reached. Giving up",
                                 _config.MaxRestartAttempts);
                             break;
                         }
@@ -469,8 +470,10 @@ namespace LocalProxyServer
             try
             {
                 var tasks = new List<Task>();
-                if (_monitorTask != null) tasks.Add(_monitorTask);
-                if (_healthCheckTask != null) tasks.Add(_healthCheckTask);
+                if (_monitorTask != null)
+                    tasks.Add(_monitorTask);
+                if (_healthCheckTask != null)
+                    tasks.Add(_healthCheckTask);
                 if (tasks.Count > 0)
                     Task.WaitAll([.. tasks], TimeSpan.FromSeconds(2));
             }
@@ -495,7 +498,7 @@ namespace LocalProxyServer
                     _process.WaitForExit(2000);
                 }
 
-                _logger?.LogInformation("Upstream process stopped with exit code {ExitCode}", 
+                _logger?.LogInformation("Upstream process stopped with exit code {ExitCode}",
                     _process.ExitCode);
             }
             catch (Exception ex)

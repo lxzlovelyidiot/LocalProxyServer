@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+
 using Microsoft.Extensions.Logging;
 
 namespace LocalProxyServer
@@ -70,7 +71,7 @@ namespace LocalProxyServer
                 }
 
                 var responseText = responseBuilder.ToString();
-                _logger?.LogDebug("Received HTTP proxy response: {Response}", 
+                _logger?.LogDebug("Received HTTP proxy response: {Response}",
                     responseText.Split('\r')[0]);
 
                 // Parse status line
@@ -82,7 +83,7 @@ namespace LocalProxyServer
 
                 var statusLine = lines[0];
                 var parts = statusLine.Split(' ', 3);
-                
+
                 if (parts.Length < 2)
                 {
                     throw new Exception($"Invalid HTTP proxy status line: {statusLine}");
@@ -96,19 +97,19 @@ namespace LocalProxyServer
                 if (statusCode != 200)
                 {
                     var statusMessage = parts.Length > 2 ? parts[2] : "Unknown error";
-                    _logger?.LogError("HTTP proxy connection failed with status {StatusCode}: {Message}", 
+                    _logger?.LogError("HTTP proxy connection failed with status {StatusCode}: {Message}",
                         statusCode, statusMessage);
                     throw new Exception($"HTTP proxy connection failed: {statusCode} {statusMessage}");
                 }
 
-                _logger?.LogInformation("HTTP proxy connection established to {Target}:{Port} via {ProxyHost}:{ProxyPort}", 
+                _logger?.LogInformation("HTTP proxy connection established to {Target}:{Port} via {ProxyHost}:{ProxyPort}",
                     targetHost, targetPort, _proxyHost, _proxyPort);
 
                 return client;
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "Failed to connect through HTTP proxy to {Target}:{Port}", 
+                _logger?.LogError(ex, "Failed to connect through HTTP proxy to {Target}:{Port}",
                     targetHost, targetPort);
                 client.Dispose();
                 throw;

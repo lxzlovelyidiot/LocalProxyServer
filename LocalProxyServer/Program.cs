@@ -1,6 +1,11 @@
 using LocalProxyServer;
-using System.Security.Cryptography.X509Certificates;
+
 using Microsoft.Extensions.Logging;
+
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.Cryptography.X509Certificates;
 
 namespace LocalProxyServer
 {
@@ -11,7 +16,7 @@ namespace LocalProxyServer
         private static CrlServer? _crlServer;
         private static ILogger<Program>? _programLogger;
 
-        public static async Task Main(string[] args)
+        private static async Task ProxyMain(string[] args)
         {
             var builder = WebApplication.CreateBuilder(args);
             var configuration = builder.Configuration;
@@ -26,11 +31,11 @@ namespace LocalProxyServer
             _programLogger = loggerFactory.CreateLogger<Program>();
 
             // Get configuration using the new model
-            var proxyConfig = configuration.GetSection("Proxy").Get<ProxyConfiguration>() 
+            var proxyConfig = configuration.GetSection("Proxy").Get<ProxyConfiguration>()
                 ?? new ProxyConfiguration();
 
             _programLogger.LogInformation("Starting LocalProxyServer");
-            _programLogger.LogInformation("Configuration: Port={Port}, HTTPS={UseHttps}, CRL Port={CrlPort}", 
+            _programLogger.LogInformation("Configuration: Port={Port}, HTTPS={UseHttps}, CRL Port={CrlPort}",
                 proxyConfig.Port, proxyConfig.UseHttps, proxyConfig.CrlPort);
 
             // Register cleanup handlers for all exit scenarios
@@ -54,6 +59,8 @@ namespace LocalProxyServer
                 allUpstreams.AddRange(proxyConfig.Upstreams);
             }
 
+            Environment.SetEnvironmentVariable("LSP_PATH", Environment.ProcessPath);
+            Environment.SetEnvironmentVariable("LSP_PWD", Environment.CurrentDirectory);
             foreach (var upstream in allUpstreams)
             {
                 if (upstream.Enabled)
@@ -65,7 +72,7 @@ namespace LocalProxyServer
                     if (upstream.Process != null)
                     {
                         var processLogger = loggerFactory.CreateLogger<UpstreamProcessManager>();
-                            var processManager = new UpstreamProcessManager(upstream, processLogger);
+                        var processManager = new UpstreamProcessManager(upstream, processLogger);
                         _upstreamProcesses.Add(processManager);
 
                         var started = await processManager.StartAsync(cts.Token);
@@ -84,19 +91,19 @@ namespace LocalProxyServer
 
             // Setup certificates if HTTPS is enabled
             X509Certificate2? cert = null;
-            
+
             if (proxyConfig.UseHttps)
             {
                 string? crlDistributionUrl = proxyConfig.CrlPort > 0
                     ? $"http://127.0.0.1:{proxyConfig.CrlPort}/crl.der"
                     : null;
-                
-                _programLogger.LogInformation("Generating server certificate with CRL distribution point: {CrlUrl}", 
+
+                _programLogger.LogInformation("Generating server certificate with CRL distribution point: {CrlUrl}",
                     crlDistributionUrl);
-                
+
                 cert = CertificateManager.GetOrCreateServerCertificate(crlDistributionUrl);
                 _programLogger.LogInformation("Server certificate ready: {Subject}", cert.Subject);
-                
+
                 if (proxyConfig.CrlPort > 0)
                 {
                     var rootCa = CertificateManager.GetRootCa();
@@ -112,7 +119,7 @@ namespace LocalProxyServer
 
             // Start proxy server
             _proxy = new ProxyServer(proxyConfig.Port, activeUpstreams, proxyConfig.LoadBalancingStrategy, cert, logger);
-            
+
             var proxyTask = _proxy.StartAsync();
 
             _programLogger.LogInformation("Proxy server is running. Press Ctrl+C to stop");
@@ -127,6 +134,27 @@ namespace LocalProxyServer
             }
 
             Cleanup();
+        }
+
+        [SupportedOSPlatform("windows")]
+        [SupportedOSPlatform("linux")]
+        public static async Task Main(string[] args)
+        {
+            if (args.Length >= 4 && args[0] == "client" && args[1] == "tunnel" && args[2] == "--server")
+            {
+
+                await QuicClientTunnel.RunAsync(args[3]);
+                return;
+            }
+            // dotnet publish -r linux-musl-x64 -c Release /p:PublishAot=true /p:SelfContained=true
+            if (args.Length >= 6 && args[0] == "server" && args[1] == "tunnel" && args[2] == "--listen" && args[4] == "--forward")
+            {
+                await QuicServerTunnel.RunAsync(args[3], args[5]);
+                return;
+            }
+
+            await ProxyMain(args);
+            return;
         }
 
         private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
@@ -144,7 +172,7 @@ namespace LocalProxyServer
         private static void Cleanup()
         {
             _programLogger?.LogInformation("Stopping servers");
-            
+
             try
             {
                 _proxy?.Stop();
@@ -174,7 +202,7 @@ namespace LocalProxyServer
                     _programLogger?.LogError(ex, "Error stopping upstream process");
                 }
             }
-            
+
             _programLogger?.LogInformation("LocalProxyServer stopped");
         }
     }
