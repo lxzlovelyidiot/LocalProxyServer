@@ -15,6 +15,7 @@ namespace LocalProxyServer
         private static ProxyServer? _proxy;
         private static CrlServer? _crlServer;
         private static ILogger<Program>? _programLogger;
+        private static CancellationTokenSource? _shutdownCts;
 
         private static async Task ProxyMain(string[] args)
         {
@@ -43,7 +44,8 @@ namespace LocalProxyServer
             Console.CancelKeyPress += OnCancelKeyPress;
 
             // Handle graceful shutdown
-            var cts = new CancellationTokenSource();
+            _shutdownCts = new CancellationTokenSource();
+            var cts = _shutdownCts;
 
             // Setup upstreams
             var activeUpstreams = new List<UpstreamConfiguration>();
@@ -161,6 +163,7 @@ namespace LocalProxyServer
         {
             e.Cancel = true;
             _programLogger?.LogInformation("Shutdown requested (Ctrl+C)");
+            _shutdownCts?.Cancel();
         }
 
         private static void OnProcessExit(object? sender, EventArgs e)

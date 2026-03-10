@@ -365,6 +365,20 @@ namespace LocalProxyServer
         {
             try
             {
+                if (_process != null && !_process.HasExited)
+                {
+                    try
+                    {
+                        _logger?.LogInformation("Killing existing upstream process (PID {ProcessId}) before restart", _process.Id);
+                        _process.Kill(entireProcessTree: true);
+                        _process.WaitForExit(2000);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to kill existing process during restart");
+                    }
+                }
+
                 // Dispose old process
                 _process?.Dispose();
 
@@ -489,11 +503,19 @@ namespace LocalProxyServer
                 _logger?.LogInformation("Stopping upstream process (PID {ProcessId})", _process.Id);
 
                 // Try graceful shutdown first
-                _process.CloseMainWindow();
-
-                if (!_process.WaitForExit(5000))
+                bool closeSent = false;
+                try
                 {
-                    _logger?.LogWarning("Upstream process did not exit gracefully, killing it");
+                    closeSent = _process.CloseMainWindow();
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "Could not send CloseMainWindow signal");
+                }
+
+                if (!closeSent || !_process.WaitForExit(3000))
+                {
+                    _logger?.LogWarning("Upstream process did not exit gracefully (or has no main window), killing it");
                     _process.Kill(entireProcessTree: true);
                     _process.WaitForExit(2000);
                 }
