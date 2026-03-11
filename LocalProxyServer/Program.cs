@@ -67,9 +67,18 @@ namespace LocalProxyServer
             {
                 if (upstream.Enabled)
                 {
-                    activeUpstreams.Add(upstream);
-                    _programLogger.LogInformation("Upstream {Type} proxy enabled: {Host}:{Port}",
-                        upstream.Type.ToUpperInvariant(), upstream.Host, upstream.Port);
+                    if (upstream.Type.Equals("socks5", StringComparison.OrdinalIgnoreCase) || 
+                        upstream.Type.Equals("http", StringComparison.OrdinalIgnoreCase))
+                    {
+                        activeUpstreams.Add(upstream);
+                        _programLogger.LogInformation("Upstream {Type} proxy enabled: {Host}:{Port}",
+                            upstream.Type.ToUpperInvariant(), upstream.Host, upstream.Port);
+                    }
+                    else
+                    {
+                        _programLogger.LogInformation("Background daemon process enabled: {Type} {Host}:{Port}",
+                            upstream.Type, upstream.Host, upstream.Port);
+                    }
 
                     if (upstream.Process != null)
                     {
@@ -144,8 +153,12 @@ namespace LocalProxyServer
         {
             if (args.Length >= 4 && args[0] == "client" && args[1] == "tunnel" && args[2] == "--server")
             {
-
-                await QuicClientTunnel.RunAsync(args[3]);
+                string? listenEndpoint = null;
+                if (args.Length >= 6 && args[4] == "--listen")
+                {
+                    listenEndpoint = args[5];
+                }
+                await QuicClientTunnel.RunAsync(args[3], listenEndpoint);
                 return;
             }
             // dotnet publish -r linux-musl-x64 -c Release /p:PublishAot=true /p:SelfContained=true
