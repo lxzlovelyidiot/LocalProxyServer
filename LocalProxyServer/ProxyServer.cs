@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -484,6 +484,8 @@ namespace LocalProxyServer
                 if (string.IsNullOrEmpty(upstream.Host))
                     continue;
 
+                var upstreamLabel = $"{upstream.Type.ToUpperInvariant()} {upstream.Host}:{upstream.Port}";
+
                 try
                 {
                     return upstream.Type.ToLowerInvariant() switch
@@ -495,8 +497,8 @@ namespace LocalProxyServer
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to connect to upstream {Type} proxy {Host}:{Port}", upstream.Type, upstream.Host, upstream.Port);
-                    exceptions.Add(ex);
+                    _logger.LogWarning(ex, "Failed to connect to upstream {Upstream}", upstreamLabel);
+                    exceptions.Add(new Exception($"Upstream {upstreamLabel} failed: {ex.Message}", ex));
                 }
             }
 
@@ -576,3 +578,4 @@ namespace LocalProxyServer
         }
     }
 }
+

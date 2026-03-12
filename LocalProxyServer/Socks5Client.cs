@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
@@ -42,10 +42,10 @@ namespace LocalProxyServer
 
                 if (response[0] != 0x05 || response[1] != 0x00)
                 {
-                    _logger?.LogError("SOCKS5 handshake failed. Version: {Version}, Method: {Method}",
-                        response[0], response[1]);
+                    _logger?.LogError("SOCKS5 handshake failed for server {SocksHost}:{SocksPort}. Version: {Version}, Method: {Method}",
+                        _socksHost, _socksPort, response[0], response[1]);
                     client.Close();
-                    throw new IOException("SOCKS5 handshake failed or authentication required.");
+                    throw new IOException($"SOCKS5 handshake failed or authentication required for server {_socksHost}:{_socksPort}.");
                 }
 
                 _logger?.LogDebug("SOCKS5 handshake successful, sending connect request");
@@ -90,10 +90,10 @@ namespace LocalProxyServer
                 if (resHeader[1] != 0x00)
                 {
                     var errorMsg = GetSocks5ErrorMessage(resHeader[1]);
-                    _logger?.LogError("SOCKS5 connect failed with error code: {Code} - {Message}",
-                        resHeader[1], errorMsg);
+                    _logger?.LogError("SOCKS5 connect failed for server {SocksHost}:{SocksPort} with error code: {Code} - {Message}",
+                        _socksHost, _socksPort, resHeader[1], errorMsg);
                     client.Close();
-                    throw new IOException($"SOCKS5 connect failed with error code: {resHeader[1]} - {errorMsg}");
+                    throw new IOException($"SOCKS5 connect failed for server {_socksHost}:{_socksPort} with error code: {resHeader[1]} - {errorMsg}");
                 }
 
                 // Skip remaining address part of the response
@@ -117,8 +117,9 @@ namespace LocalProxyServer
             catch (EndOfStreamException ex)
             {
                 client.Dispose();
-                _logger?.LogError(ex, "SOCKS5 server closed the connection during handshake");
-                throw new IOException("SOCKS5 server closed the connection during handshake", ex);
+                _logger?.LogError(ex, "SOCKS5 server {SocksHost}:{SocksPort} closed the connection during handshake",
+                    _socksHost, _socksPort);
+                throw new IOException($"SOCKS5 server {_socksHost}:{_socksPort} closed the connection during handshake", ex);
             }
             catch (IOException)
             {
@@ -128,7 +129,8 @@ namespace LocalProxyServer
             catch (Exception ex)
             {
                 client.Dispose();
-                _logger?.LogError(ex, "Unexpected error while connecting to SOCKS5 server");
+                _logger?.LogError(ex, "Unexpected error while connecting to SOCKS5 server {SocksHost}:{SocksPort}",
+                    _socksHost, _socksPort);
                 throw;
             }
         }
@@ -169,3 +171,4 @@ namespace LocalProxyServer
         }
     }
 }
+

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
@@ -58,7 +58,7 @@ namespace LocalProxyServer
                     var bytesRead = await stream.ReadAsync(buffer, 0, 1);
                     if (bytesRead == 0)
                     {
-                        throw new Exception("HTTP proxy closed connection while reading response");
+                        throw new Exception($"HTTP proxy {_proxyHost}:{_proxyPort} closed connection while reading response");
                     }
 
                     responseBuilder.Append((char)buffer[0]);
@@ -78,7 +78,7 @@ namespace LocalProxyServer
                 var lines = responseText.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
                 if (lines.Length == 0)
                 {
-                    throw new Exception("Invalid HTTP proxy response");
+                    throw new Exception($"Invalid HTTP proxy response from {_proxyHost}:{_proxyPort}");
                 }
 
                 var statusLine = lines[0];
@@ -86,20 +86,20 @@ namespace LocalProxyServer
 
                 if (parts.Length < 2)
                 {
-                    throw new Exception($"Invalid HTTP proxy status line: {statusLine}");
+                    throw new Exception($"Invalid HTTP proxy status line from {_proxyHost}:{_proxyPort}: {statusLine}");
                 }
 
                 if (!int.TryParse(parts[1], out var statusCode))
                 {
-                    throw new Exception($"Invalid HTTP proxy status code: {parts[1]}");
+                    throw new Exception($"Invalid HTTP proxy status code from {_proxyHost}:{_proxyPort}: {parts[1]}");
                 }
 
                 if (statusCode != 200)
                 {
                     var statusMessage = parts.Length > 2 ? parts[2] : "Unknown error";
-                    _logger?.LogError("HTTP proxy connection failed with status {StatusCode}: {Message}",
-                        statusCode, statusMessage);
-                    throw new Exception($"HTTP proxy connection failed: {statusCode} {statusMessage}");
+                    _logger?.LogError("HTTP proxy {ProxyHost}:{ProxyPort} connection failed with status {StatusCode}: {Message}",
+                        _proxyHost, _proxyPort, statusCode, statusMessage);
+                    throw new Exception($"HTTP proxy {_proxyHost}:{_proxyPort} connection failed: {statusCode} {statusMessage}");
                 }
 
                 _logger?.LogInformation("HTTP proxy connection established to {Target}:{Port} via {ProxyHost}:{ProxyPort}",
@@ -109,8 +109,8 @@ namespace LocalProxyServer
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "Failed to connect through HTTP proxy to {Target}:{Port}",
-                    targetHost, targetPort);
+                _logger?.LogError(ex, "Failed to connect through HTTP proxy {ProxyHost}:{ProxyPort} to {Target}:{Port}",
+                    _proxyHost, _proxyPort, targetHost, targetPort);
                 client.Dispose();
                 throw;
             }
@@ -127,3 +127,4 @@ namespace LocalProxyServer
         }
     }
 }
+
