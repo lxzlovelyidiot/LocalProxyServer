@@ -567,8 +567,8 @@ Modify `appsettings.json`:
 ## Additional Documentation
 
 - [Upstream Proxy Configuration & Multi-Upstream Setup](#upstream-proxy-configuration)
+- [DNS Server (DoH + SOCKS5 Upstream)](DNS_SERVER.md)
 - [Process Management and Auto-restart](PROCESS_CLEANUP.md)
 - [Auto-restart Feature](AUTO_RESTART.md)
 - [Windows Job Objects (Process Cleanup)](JOB_OBJECTS.md)
 - [Configuration Examples](appsettings.example.json)
-

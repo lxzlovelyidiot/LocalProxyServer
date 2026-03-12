@@ -14,8 +14,87 @@ namespace LocalProxyServer
         private static List<UpstreamProcessManager> _upstreamProcesses = new();
         private static ProxyServer? _proxy;
         private static CrlServer? _crlServer;
+        private static DnsServer? _dnsServer;
         private static ILogger<Program>? _programLogger;
         private static CancellationTokenSource? _shutdownCts;
+
+        private static async Task DnsMain(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+            var configuration = builder.Configuration;
+
+            // Configure logging
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
+
+            var app = builder.Build();
+            var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+            _programLogger = loggerFactory.CreateLogger<Program>();
+
+            var dnsConfig = configuration.GetSection("Dns").Get<DnsConfiguration>()
+                ?? new DnsConfiguration();
+
+            _programLogger.LogInformation("Starting LocalProxyServer (DNS mode)");
+            _programLogger.LogInformation("DNS server enabled on port {Port}", dnsConfig.Port);
+
+            // Register cleanup handlers for all exit scenarios
+            AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+            Console.CancelKeyPress += OnCancelKeyPress;
+
+            // Handle graceful shutdown
+            _shutdownCts = new CancellationTokenSource();
+            var cts = _shutdownCts;
+
+            // Setup upstreams for DNS
+            var allUpstreams = new List<UpstreamConfiguration>();
+            if (dnsConfig.Upstreams != null)
+            {
+                allUpstreams.AddRange(dnsConfig.Upstreams);
+            }
+
+            Environment.SetEnvironmentVariable("LSP_PATH", Environment.ProcessPath);
+            Environment.SetEnvironmentVariable("LSP_PWD", Environment.CurrentDirectory);
+            foreach (var upstream in allUpstreams)
+            {
+                if (!upstream.Enabled)
+                {
+                    continue;
+                }
+
+                _programLogger.LogInformation("DNS upstream {Type} proxy enabled: {Host}:{Port}",
+                    upstream.Type.ToUpperInvariant(), upstream.Host, upstream.Port);
+
+                if (upstream.Process != null)
+                {
+                    var processLogger = loggerFactory.CreateLogger<UpstreamProcessManager>();
+                    var processManager = new UpstreamProcessManager(upstream, processLogger);
+                    _upstreamProcesses.Add(processManager);
+
+                    var started = await processManager.StartAsync(cts.Token);
+                    if (!started)
+                    {
+                        _programLogger.LogError("Failed to start upstream process. DNS to {Host}:{Port} may not work correctly", upstream.Host, upstream.Port);
+                    }
+                }
+            }
+
+            var dnsLogger = loggerFactory.CreateLogger<DnsServer>();
+            _dnsServer = new DnsServer(dnsConfig, dnsLogger);
+            await _dnsServer.StartAsync();
+
+            _programLogger.LogInformation("DNS server is running. Press Ctrl+C to stop");
+
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on shutdown
+            }
+
+            Cleanup();
+        }
 
         private static async Task ProxyMain(string[] args)
         {
@@ -168,6 +247,14 @@ namespace LocalProxyServer
                 return;
             }
 
+            if (args.Length >= 2 &&
+                args[0].Equals("dns", StringComparison.OrdinalIgnoreCase) &&
+                args[1].Equals("server", StringComparison.OrdinalIgnoreCase))
+            {
+                await DnsMain(args);
+                return;
+            }
+
             await ProxyMain(args);
             return;
         }
@@ -205,6 +292,15 @@ namespace LocalProxyServer
             catch (Exception ex)
             {
                 _programLogger?.LogError(ex, "Error stopping CRL server");
+            }
+
+            try
+            {
+                _dnsServer?.Stop();
+            }
+            catch (Exception ex)
+            {
+                _programLogger?.LogError(ex, "Error stopping DNS server");
             }
 
             foreach (var process in _upstreamProcesses)
