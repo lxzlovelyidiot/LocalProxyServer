@@ -6,6 +6,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 
 namespace LocalProxyServer
 {
@@ -17,6 +18,8 @@ namespace LocalProxyServer
         private static DnsServer? _dnsServer;
         private static ILogger<Program>? _programLogger;
         private static CancellationTokenSource? _shutdownCts;
+        private static readonly List<IDisposable> _posixSignalRegistrations = new();
+        private static int _cleanupStarted;
 
         private static async Task DnsMain(string[] args)
         {
@@ -40,6 +43,7 @@ namespace LocalProxyServer
             // Register cleanup handlers for all exit scenarios
             AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
             Console.CancelKeyPress += OnCancelKeyPress;
+            RegisterLinuxSignals();
 
             // Handle graceful shutdown
             _shutdownCts = new CancellationTokenSource();
@@ -121,6 +125,7 @@ namespace LocalProxyServer
             // Register cleanup handlers for all exit scenarios
             AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
             Console.CancelKeyPress += OnCancelKeyPress;
+            RegisterLinuxSignals();
 
             // Handle graceful shutdown
             _shutdownCts = new CancellationTokenSource();
@@ -274,6 +279,11 @@ namespace LocalProxyServer
 
         private static void Cleanup()
         {
+            if (Interlocked.Exchange(ref _cleanupStarted, 1) == 1)
+            {
+                return;
+            }
+
             _programLogger?.LogInformation("Stopping servers");
 
             try
@@ -315,7 +325,54 @@ namespace LocalProxyServer
                 }
             }
 
+            foreach (var registration in _posixSignalRegistrations)
+            {
+                registration.Dispose();
+            }
+            _posixSignalRegistrations.Clear();
+
             _programLogger?.LogInformation("LocalProxyServer stopped");
+        }
+
+        private static void RegisterLinuxSignals()
+        {
+            if (!OperatingSystem.IsLinux())
+            {
+                return;
+            }
+
+            if (_posixSignalRegistrations.Count > 0)
+            {
+                return;
+            }
+
+            _posixSignalRegistrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+            {
+                _programLogger?.LogInformation("Shutdown requested (SIGTERM)");
+                _shutdownCts?.Cancel();
+                context.Cancel = true;
+            }));
+
+            _posixSignalRegistrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGINT, context =>
+            {
+                _programLogger?.LogInformation("Shutdown requested (SIGINT)");
+                _shutdownCts?.Cancel();
+                context.Cancel = true;
+            }));
+
+            _posixSignalRegistrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGQUIT, context =>
+            {
+                _programLogger?.LogInformation("Shutdown requested (SIGQUIT)");
+                _shutdownCts?.Cancel();
+                context.Cancel = true;
+            }));
+
+            _posixSignalRegistrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGHUP, context =>
+            {
+                _programLogger?.LogInformation("Shutdown requested (SIGHUP)");
+                _shutdownCts?.Cancel();
+                context.Cancel = true;
+            }));
         }
     }
 }
