@@ -259,20 +259,14 @@ namespace LocalProxyServer
                 }
             }
 
-            _logger.LogWarning("All DoH endpoints failed");
+            var queryName = DnsMessageParser.GetQueryName(request);
+            _logger.LogWarning("All DoH endpoints failed for {QueryName}", queryName);
             return Array.Empty<byte>();
         }
 
         private static string BuildCacheKey(byte[] request)
         {
-            var keyBytes = (byte[])request.Clone();
-            if (keyBytes.Length >= 2)
-            {
-                keyBytes[0] = 0;
-                keyBytes[1] = 0;
-            }
-
-            return Convert.ToBase64String(keyBytes);
+            return DnsMessageParser.GetCacheKey(request);
         }
 
         private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken token)

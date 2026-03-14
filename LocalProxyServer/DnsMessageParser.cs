@@ -2,6 +2,54 @@ namespace LocalProxyServer
 {
     public static class DnsMessageParser
     {
+        public static string GetCacheKey(byte[] message)
+        {
+            if (message.Length < 12)
+            {
+                return Convert.ToBase64String(message);
+            }
+
+            int offset = 12;
+            if (TryParseName(message, ref offset, out var name))
+            {
+                // DNS names are case-insensitive, normalize to lowercase
+                name = name.ToLowerInvariant();
+
+                // Expect 4 more bytes for QTYPE and QCLASS
+                if (offset + 4 <= message.Length)
+                {
+                    ushort qtype = (ushort)((message[offset] << 8) | message[offset + 1]);
+                    ushort qclass = (ushort)((message[offset + 2] << 8) | message[offset + 3]);
+                    return $"{name}:{qtype}:{qclass}";
+                }
+
+                return name;
+            }
+
+            // Fallback for malformed or unusual packets: 
+            // clone and zero out Transaction ID to allow caching identical binary queries
+            var keyBytes = (byte[])message.Clone();
+            keyBytes[0] = 0;
+            keyBytes[1] = 0;
+            return Convert.ToBase64String(keyBytes);
+        }
+
+        public static string GetQueryName(byte[] message)
+        {
+            if (message.Length < 12)
+            {
+                return "unknown";
+            }
+
+            int offset = 12;
+            if (TryParseName(message, ref offset, out var name))
+            {
+                return name;
+            }
+
+            return "unknown";
+        }
+
         public static bool TryGetMinimumTtl(byte[] response, out int minTtlSeconds)
         {
             minTtlSeconds = 0;
@@ -71,6 +119,63 @@ namespace LocalProxyServer
             }
 
             minTtlSeconds = minTtl ?? 0;
+            return true;
+        }
+
+        private static bool TryParseName(byte[] message, ref int offset, out string name)
+        {
+            var labels = new List<string>();
+            int currentOffset = offset;
+            int? firstPointerOffset = null;
+            int jumps = 0;
+            const int maxJumps = 16; // RFC doesn't specify, but 16 is plenty for legitimate names
+
+            while (true)
+            {
+                if (!EnsureAvailable(message, currentOffset, 1))
+                {
+                    name = string.Empty;
+                    return false;
+                }
+
+                byte length = message[currentOffset];
+                if (length == 0)
+                {
+                    currentOffset += 1;
+                    break;
+                }
+
+                if ((length & 0xC0) == 0xC0)
+                {
+                    if (jumps++ > maxJumps || !EnsureAvailable(message, currentOffset, 2))
+                    {
+                        name = string.Empty;
+                        return false;
+                    }
+
+                    int pointer = ((length & 0x3F) << 8) | message[currentOffset + 1];
+                    if (firstPointerOffset == null)
+                    {
+                        firstPointerOffset = currentOffset + 2;
+                    }
+
+                    currentOffset = pointer;
+                    continue;
+                }
+
+                currentOffset += 1;
+                if (!EnsureAvailable(message, currentOffset, length))
+                {
+                    name = string.Empty;
+                    return false;
+                }
+
+                labels.Add(System.Text.Encoding.ASCII.GetString(message, currentOffset, length));
+                currentOffset += length;
+            }
+
+            offset = firstPointerOffset ?? currentOffset;
+            name = string.Join(".", labels);
             return true;
         }
 
