@@ -10,7 +10,8 @@ namespace LocalProxyServer
         private readonly DnsConfiguration _config;
         private readonly ILogger _logger;
         private readonly DnsCache? _cache;
-        private readonly IReadOnlyList<DnsOverHttpsClient> _dohClients;
+        private readonly IReadOnlyList<DnsOverHttpsClient> _upstreamDohClients;
+        private readonly DnsOverHttpsClient? _defaultDohClient;
         private readonly CancellationTokenSource _cts = new();
         private Socket? _udpSocket;
         private TcpListener? _tcpListener;
@@ -22,10 +23,16 @@ namespace LocalProxyServer
             _cache = config.Cache.Enabled ? new DnsCache(config.Cache) : null;
 
             var socksClients = BuildSocks5Clients(config, logger);
-            var endpoints = BuildEndpoints(config).ToList();
-            _dohClients = endpoints
+            var upstreamEndpoints = BuildEndpoints(config).ToList();
+            _upstreamDohClients = upstreamEndpoints
                 .Select(endpoint => new DnsOverHttpsClient(endpoint, socksClients, config.TimeoutMs, logger, config.GetPreferredAddressFamily()))
                 .ToList();
+
+            if (!string.IsNullOrEmpty(config.DefaultDohEndpoint) && Uri.TryCreate(config.DefaultDohEndpoint, UriKind.Absolute, out var defaultUri))
+            {
+                // Default DoH usually goes direct, not through SOCKS5 upstream (unless explicitly desired, but here we assume direct)
+                _defaultDohClient = new DnsOverHttpsClient(defaultUri, Array.Empty<Socks5Client>(), config.TimeoutMs, logger, config.GetPreferredAddressFamily());
+            }
         }
 
         public Task StartAsync()
@@ -184,7 +191,35 @@ namespace LocalProxyServer
                 return response;
             }
 
-            var responseBytes = await QueryAnyAsync(request, token);
+            var queryName = DnsMessageParser.GetQueryName(request);
+            byte[] responseBytes = Array.Empty<byte>();
+
+            if (DnsPatternMatcher.IsMatch(queryName, _config.DohEndpointsMatchs))
+            {
+                _logger.LogDebug("Query {QueryName} matches pattern, using upstream DoH", queryName);
+                responseBytes = await QueryAnyAsync(_upstreamDohClients, request, token);
+            }
+            else
+            {
+                _logger.LogDebug("Query {QueryName} does not match pattern, using default DoH/System DNS", queryName);
+                if (_defaultDohClient != null)
+                {
+                    try
+                    {
+                        responseBytes = await _defaultDohClient.QueryAsync(request, token);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Default DoH query failed for {QueryName}, falling back to System DNS", queryName);
+                    }
+                }
+
+                if (responseBytes.Length == 0)
+                {
+                    responseBytes = await QuerySystemDnsAsync(request, token);
+                }
+            }
+
             if (responseBytes.Length == 0)
             {
                 return Array.Empty<byte>();
@@ -204,19 +239,105 @@ namespace LocalProxyServer
             return responseBytes;
         }
 
-        private async Task<byte[]> QueryAnyAsync(byte[] request, CancellationToken token)
+        private async Task<byte[]> QuerySystemDnsAsync(byte[] request, CancellationToken token)
         {
-            if (_dohClients.Count == 0)
+            if (request.Length < 12) return Array.Empty<byte>();
+
+            // Only support simple A (1) and AAAA (28) queries for system fallback via Dns.GetHostAddressesAsync
+            int offset = 12;
+            if (!DnsMessageParser.TryParseName(request, ref offset, out var name) || offset + 4 > request.Length)
             {
-                _logger.LogWarning("No DoH endpoints configured");
                 return Array.Empty<byte>();
             }
 
-            if (_dohClients.Count == 1)
+            ushort qtype = (ushort)((request[offset] << 8) | request[offset + 1]);
+            // ushort qclass = (ushort)((request[offset + 2] << 8) | request[offset + 3]);
+
+            if (qtype != 1 && qtype != 28) // A or AAAA
+            {
+                _logger.LogDebug("System DNS fallback only supports A/AAAA, ignoring type {Type} for {Name}", qtype, name);
+                return Array.Empty<byte>();
+            }
+
+            try
+            {
+                _logger.LogDebug("Falling back to system DNS for {Name} (Type {Type})", name, qtype);
+                var addresses = await Dns.GetHostAddressesAsync(name, token);
+                var filtered = addresses.Where(a => (qtype == 1 && a.AddressFamily == AddressFamily.InterNetwork) ||
+                                                    (qtype == 28 && a.AddressFamily == AddressFamily.InterNetworkV6)).ToList();
+
+                if (filtered.Count == 0)
+                {
+                    return Array.Empty<byte>();
+                }
+
+                // Construct a very basic DNS response
+                // Header (12 bytes) + Question (original) + Answer Records
+                using var ms = new MemoryStream();
+                ms.Write(request, 0, offset + 4); // Original header + question
+
+                // Header update: QR=1, AA=0, TC=0, RD=1, RA=1, Z=0, RCODE=0 (0x8180)
+                ms.Position = 2;
+                ms.WriteByte(0x81);
+                ms.WriteByte(0x80);
+
+                // ANCOUNT
+                ms.Position = 6;
+                ms.WriteByte((byte)(filtered.Count >> 8));
+                ms.WriteByte((byte)(filtered.Count & 0xFF));
+
+                ms.Position = ms.Length;
+
+                foreach (var addr in filtered)
+                {
+                    // Name (Pointer to offset 12)
+                    ms.WriteByte(0xC0);
+                    ms.WriteByte(0x0C);
+
+                    // Type
+                    ms.WriteByte((byte)(qtype >> 8));
+                    ms.WriteByte((byte)(qtype & 0xFF));
+
+                    // Class (IN = 1)
+                    ms.WriteByte(0x00);
+                    ms.WriteByte(0x01);
+
+                    // TTL (e.g., 60s)
+                    ms.WriteByte(0x00);
+                    ms.WriteByte(0x00);
+                    ms.WriteByte(0x00);
+                    ms.WriteByte(0x3C);
+
+                    // Data Length
+                    var ipBytes = addr.GetAddressBytes();
+                    ms.WriteByte((byte)(ipBytes.Length >> 8));
+                    ms.WriteByte((byte)(ipBytes.Length & 0xFF));
+
+                    // Data
+                    ms.Write(ipBytes, 0, ipBytes.Length);
+                }
+
+                return ms.ToArray();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "System DNS resolution failed for {Name}", name);
+                return Array.Empty<byte>();
+            }
+        }
+
+        private async Task<byte[]> QueryAnyAsync(IReadOnlyList<DnsOverHttpsClient> clients, byte[] request, CancellationToken token)
+        {
+            if (clients.Count == 0)
+            {
+                return Array.Empty<byte>();
+            }
+
+            if (clients.Count == 1)
             {
                 try
                 {
-                    return await _dohClients[0].QueryAsync(request, token);
+                    return await clients[0].QueryAsync(request, token);
                 }
                 catch (Exception ex)
                 {
@@ -226,7 +347,7 @@ namespace LocalProxyServer
             }
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            var tasks = _dohClients
+            var tasks = clients
                 .Select(client => client.QueryAsync(request, cts.Token))
                 .ToList();
 

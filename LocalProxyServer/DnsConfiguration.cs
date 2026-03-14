@@ -8,6 +8,8 @@ namespace LocalProxyServer
         public int Port { get; set; } = 53;
         public string DohEndpoint { get; set; } = "https://dns.google/dns-query";
         public List<string>? DohEndpoints { get; set; }
+        public string? DefaultDohEndpoint { get; set; }
+        public List<string>? DohEndpointsMatchs { get; set; }
         public int TimeoutMs { get; set; } = 5000;
         public DnsCacheConfiguration Cache { get; set; } = new();
         public List<UpstreamConfiguration>? Upstreams { get; set; }

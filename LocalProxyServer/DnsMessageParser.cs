@@ -122,7 +122,7 @@ namespace LocalProxyServer
             return true;
         }
 
-        private static bool TryParseName(byte[] message, ref int offset, out string name)
+        public static bool TryParseName(byte[] message, ref int offset, out string name)
         {
             var labels = new List<string>();
             int currentOffset = offset;
