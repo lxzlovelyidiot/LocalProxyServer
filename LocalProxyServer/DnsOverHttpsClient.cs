@@ -64,7 +64,7 @@ namespace LocalProxyServer
                     try
                     {
                         _logger?.LogDebug("Connecting to DoH endpoint via SOCKS5 {Host}:{Port}", _endpoint.Host, port);
-                        return await socks5.ConnectAsync(_endpoint.Host, port);
+                        return await socks5.ConnectAsync(_endpoint.Host, port, token);
                     }
                     catch (Exception ex)
                     {
@@ -74,7 +74,7 @@ namespace LocalProxyServer
             }
 
             _logger?.LogDebug("Connecting to DoH endpoint directly {Host}:{Port}", _endpoint.Host, port);
-            return await TcpClientConnector.ConnectAsync(_endpoint.Host, port, _preferredAddressFamily);
+            return await TcpClientConnector.ConnectAsync(_endpoint.Host, port, _preferredAddressFamily, token);
         }
 
         private IEnumerable<Socks5Client> SelectSocks5Clients()

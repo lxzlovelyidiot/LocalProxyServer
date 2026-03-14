@@ -5,25 +5,25 @@ namespace LocalProxyServer
 {
     internal static class TcpClientConnector
     {
-        public static async Task<TcpClient> ConnectAsync(string host, int port, AddressFamily? preferredAddressFamily)
+        public static async Task<TcpClient> ConnectAsync(string host, int port, AddressFamily? preferredAddressFamily, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(host);
 
             if (IPAddress.TryParse(host, out var ipAddress))
             {
                 var client = CreateClient(ipAddress.AddressFamily);
-                await client.ConnectAsync(ipAddress, port);
+                await client.ConnectAsync(ipAddress, port, cancellationToken);
                 return client;
             }
 
             if (preferredAddressFamily is null || preferredAddressFamily == AddressFamily.Unspecified)
             {
                 var client = CreateDualModeClient();
-                await client.ConnectAsync(host, port);
+                await client.ConnectAsync(host, port, cancellationToken);
                 return client;
             }
 
-            var addresses = await Dns.GetHostAddressesAsync(host);
+            var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
             if (addresses.Length == 0)
             {
                 throw new InvalidOperationException($"No IP addresses found for host '{host}'.");
@@ -31,7 +31,7 @@ namespace LocalProxyServer
 
             var selectedAddress = SelectAddress(addresses, preferredAddressFamily.Value);
             var selectedClient = CreateClient(selectedAddress.AddressFamily);
-            await selectedClient.ConnectAsync(selectedAddress, port);
+            await selectedClient.ConnectAsync(selectedAddress, port, cancellationToken);
             return selectedClient;
         }
 

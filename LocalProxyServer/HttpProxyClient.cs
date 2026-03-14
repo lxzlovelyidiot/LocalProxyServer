@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
@@ -27,11 +27,11 @@ namespace LocalProxyServer
         /// <summary>
         /// Connect to target host through HTTP proxy using CONNECT method.
         /// </summary>
-        public async Task<TcpClient> ConnectAsync(string targetHost, int targetPort)
+        public async Task<TcpClient> ConnectAsync(string targetHost, int targetPort, CancellationToken cancellationToken = default)
         {
             _logger?.LogDebug("Connecting to HTTP proxy {ProxyHost}:{ProxyPort}", _proxyHost, _proxyPort);
 
-            var client = await TcpClientConnector.ConnectAsync(_proxyHost, _proxyPort, _preferredAddressFamily);
+            var client = await TcpClientConnector.ConnectAsync(_proxyHost, _proxyPort, _preferredAddressFamily, cancellationToken);
             var stream = client.GetStream();
 
             try
@@ -44,7 +44,7 @@ namespace LocalProxyServer
                                    "\r\n";
 
                 var requestBytes = Encoding.ASCII.GetBytes(connectRequest);
-                await stream.WriteAsync(requestBytes);
+                await stream.WriteAsync(requestBytes, cancellationToken);
 
                 _logger?.LogDebug("Sent CONNECT request to HTTP proxy for {Target}:{Port}", targetHost, targetPort);
 
@@ -55,7 +55,7 @@ namespace LocalProxyServer
 
                 while (!headerComplete)
                 {
-                    var bytesRead = await stream.ReadAsync(buffer, 0, 1);
+                    var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, 1), cancellationToken);
                     if (bytesRead == 0)
                     {
                         throw new Exception($"HTTP proxy {_proxyHost}:{_proxyPort} closed connection while reading response");

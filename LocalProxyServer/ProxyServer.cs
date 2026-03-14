@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -285,7 +285,7 @@ namespace LocalProxyServer
             }
         }
 
-        private async Task HandleConnectAsync(TcpClient client, Stream clientStream, string target, string clientEndpoint, AddressFamily? preferredAddressFamily)
+        private async Task HandleConnectAsync(TcpClient client, Stream clientStream, string target, string clientEndpoint, AddressFamily? preferredAddressFamily, CancellationToken cancellationToken = default)
         {
             if (!TryParseHostAndPort(target, 443, out var host, out var port))
             {
@@ -297,14 +297,14 @@ namespace LocalProxyServer
 
             try
             {
-                using var upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
+                using var upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily, cancellationToken);
                 using var upstreamStream = upstreamClient.GetStream();
 
                 _logger.LogInformation("Tunnel established: {Client} <-> {Host}:{Port}", clientEndpoint, host, port);
 
                 // Send 200 Connection Established to client
                 var response = "HTTP/1.1 200 Connection Established\r\n\r\n";
-                await clientStream.WriteAsync(Encoding.ASCII.GetBytes(response));
+                await clientStream.WriteAsync(Encoding.ASCII.GetBytes(response), cancellationToken);
 
                 // Track data transfer
                 await RelayBidirectionalAsync(clientStream, upstreamStream, clientEndpoint, $"{host}:{port}");
@@ -318,7 +318,7 @@ namespace LocalProxyServer
             }
         }
 
-        private async Task HandleHttpAsync(TcpClient client, Stream clientStream, string firstLine, StreamReader reader, string clientEndpoint, AddressFamily? preferredAddressFamily)
+        private async Task HandleHttpAsync(TcpClient client, Stream clientStream, string firstLine, StreamReader reader, string clientEndpoint, AddressFamily? preferredAddressFamily, CancellationToken cancellationToken = default)
         {
             // Simple HTTP proxying
             var parts = firstLine.Split(' ');
@@ -346,7 +346,7 @@ namespace LocalProxyServer
             // Need to read headers to find Host if not in URL, and to forward them
             var headers = new List<string>();
             string? header;
-            while (!string.IsNullOrEmpty(header = await reader.ReadLineAsync()))
+            while (!string.IsNullOrEmpty(header = await reader.ReadLineAsync(cancellationToken)))
             {
                 headers.Add(header);
                 if (string.IsNullOrEmpty(host) && header.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
@@ -371,20 +371,20 @@ namespace LocalProxyServer
 
             try
             {
-                using var upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily);
+                using var upstreamClient = await ConnectToUpstreamAsync(host, port, preferredAddressFamily, cancellationToken);
                 using var upstreamStream = upstreamClient.GetStream();
 
                 // Forward the first line but with relative path
                 var protocol = parts.Length > 2 ? parts[2] : "HTTP/1.1";
                 var newFirstLine = $"{parts[0]} {pathAndQuery} {protocol}\r\n";
-                await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(newFirstLine));
+                await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(newFirstLine), cancellationToken);
 
                 // Forward remaining headers
                 foreach (var h in headers)
                 {
-                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(h + "\r\n"));
+                    await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes(h + "\r\n"), cancellationToken);
                 }
-                await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes("\r\n"));
+                await upstreamStream.WriteAsync(Encoding.ASCII.GetBytes("\r\n"), cancellationToken);
 
                 _logger.LogInformation("HTTP proxy established: {Client} <-> {Host}:{Port}",
                     clientEndpoint, host, port);
@@ -453,13 +453,13 @@ namespace LocalProxyServer
             }
         }
 
-        private async Task<TcpClient> ConnectToUpstreamAsync(string targetHost, int targetPort, AddressFamily? preferredAddressFamily)
+        private async Task<TcpClient> ConnectToUpstreamAsync(string targetHost, int targetPort, AddressFamily? preferredAddressFamily, CancellationToken cancellationToken = default)
         {
             if (_upstreams.Count == 0)
             {
                 // Direct connection
                 _logger.LogDebug("Connecting directly to {Host}:{Port}", targetHost, targetPort);
-                return await TcpClientConnector.ConnectAsync(targetHost, targetPort, preferredAddressFamily);
+                return await TcpClientConnector.ConnectAsync(targetHost, targetPort, preferredAddressFamily, cancellationToken);
             }
 
             IEnumerable<UpstreamConfiguration> selectedUpstreams;
@@ -490,8 +490,8 @@ namespace LocalProxyServer
                 {
                     return upstream.Type.ToLowerInvariant() switch
                     {
-                        "socks5" => await ConnectViaSocks5Async(targetHost, targetPort, upstream, preferredAddressFamily),
-                        "http" => await ConnectViaHttpAsync(targetHost, targetPort, upstream, preferredAddressFamily),
+                        "socks5" => await ConnectViaSocks5Async(targetHost, targetPort, upstream, preferredAddressFamily, cancellationToken),
+                        "http" => await ConnectViaHttpAsync(targetHost, targetPort, upstream, preferredAddressFamily, cancellationToken),
                         _ => throw new NotSupportedException($"Upstream type '{upstream.Type}' is not supported")
                     };
                 }
@@ -505,22 +505,22 @@ namespace LocalProxyServer
             throw new AggregateException($"Failed to connect to any upstream proxy for destination {targetHost}:{targetPort}", exceptions);
         }
 
-        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort, UpstreamConfiguration upstream, AddressFamily? preferredAddressFamily)
+        private async Task<TcpClient> ConnectViaSocks5Async(string targetHost, int targetPort, UpstreamConfiguration upstream, AddressFamily? preferredAddressFamily, CancellationToken cancellationToken = default)
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via SOCKS5 {UpstreamHost}:{UpstreamPort}",
                 targetHost, targetPort, upstream.Host, upstream.Port);
 
             var socks = new Socks5Client(upstream.Host!, upstream.Port, _logger, preferredAddressFamily);
-            return await socks.ConnectAsync(targetHost, targetPort);
+            return await socks.ConnectAsync(targetHost, targetPort, cancellationToken);
         }
 
-        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort, UpstreamConfiguration upstream, AddressFamily? preferredAddressFamily)
+        private async Task<TcpClient> ConnectViaHttpAsync(string targetHost, int targetPort, UpstreamConfiguration upstream, AddressFamily? preferredAddressFamily, CancellationToken cancellationToken = default)
         {
             _logger.LogDebug("Connecting to {Host}:{Port} via HTTP proxy {UpstreamHost}:{UpstreamPort}",
                 targetHost, targetPort, upstream.Host, upstream.Port);
 
             var httpProxy = new HttpProxyClient(upstream.Host!, upstream.Port, _logger, preferredAddressFamily);
-            return await httpProxy.ConnectAsync(targetHost, targetPort);
+            return await httpProxy.ConnectAsync(targetHost, targetPort, cancellationToken);
         }
 
         private static bool TryParseHostAndPort(string hostValue, int defaultPort, out string host, out int port)

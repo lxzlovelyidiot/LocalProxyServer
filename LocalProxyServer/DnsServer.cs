@@ -242,7 +242,20 @@ namespace LocalProxyServer
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "DoH endpoint failed");
+                    if (ex is OperationCanceledException && cts.IsCancellationRequested)
+                    {
+                        // Intentional cancellation because another endpoint succeeded
+                        _logger.LogDebug("DoH endpoint query canceled because another endpoint succeeded");
+                    }
+                    else if (ex is OperationCanceledException)
+                    {
+                        // Likely a timeout (token from QueryAnyAsync expired)
+                        _logger.LogDebug("DoH endpoint query timed out");
+                    }
+                    else
+                    {
+                        _logger.LogDebug(ex, $"DoH endpoint failed, {ex.Message}");
+                    }
                 }
             }
 

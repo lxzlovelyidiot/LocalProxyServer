@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
@@ -21,11 +21,11 @@ namespace LocalProxyServer
             _preferredAddressFamily = preferredAddressFamily;
         }
 
-        public async Task<TcpClient> ConnectAsync(string targetHost, int targetPort)
+        public async Task<TcpClient> ConnectAsync(string targetHost, int targetPort, CancellationToken cancellationToken = default)
         {
             _logger?.LogDebug("Connecting to SOCKS5 server {SocksHost}:{SocksPort}", _socksHost, _socksPort);
 
-            var client = await TcpClientConnector.ConnectAsync(_socksHost, _socksPort, _preferredAddressFamily);
+            var client = await TcpClientConnector.ConnectAsync(_socksHost, _socksPort, _preferredAddressFamily, cancellationToken);
             client.ReceiveTimeout = 10000;
             client.SendTimeout = 10000;
             var stream = client.GetStream();
@@ -36,9 +36,9 @@ namespace LocalProxyServer
             // [Version, NumMethods, Method1, ...]
             try
             {
-                await stream.WriteAsync(new byte[] { 0x05, 0x01, 0x00 });
+                await stream.WriteAsync(new byte[] { 0x05, 0x01, 0x00 }, cancellationToken);
                 var response = new byte[2];
-                await ReadExactlyAsync(stream, response);
+                await ReadExactlyAsync(stream, response, cancellationToken);
 
                 if (response[0] != 0x05 || response[1] != 0x00)
                 {
@@ -81,11 +81,11 @@ namespace LocalProxyServer
                 request.Add((byte)(targetPort >> 8));
                 request.Add((byte)(targetPort & 0xFF));
 
-                await stream.WriteAsync(request.ToArray());
+                await stream.WriteAsync(request.ToArray(), cancellationToken);
 
                 // 3. Response
                 var resHeader = new byte[4];
-                await ReadExactlyAsync(stream, resHeader);
+                await ReadExactlyAsync(stream, resHeader, cancellationToken);
 
                 if (resHeader[1] != 0x00)
                 {
@@ -101,13 +101,13 @@ namespace LocalProxyServer
                 int skipLen = addrType switch
                 {
                     0x01 => 4 + 2, // IPv4 + Port
-                    0x03 => (await ReadByteAsync(stream)) + 2, // Domain + Port
+                    0x03 => (await ReadByteAsync(stream, cancellationToken)) + 2, // Domain + Port
                     0x04 => 16 + 2, // IPv6 + Port
                     _ => throw new Exception("Unknown address type in SOCKS5 response")
                 };
 
                 var skipBuf = new byte[skipLen];
-                await ReadExactlyAsync(stream, skipBuf);
+                await ReadExactlyAsync(stream, skipBuf, cancellationToken);
 
                 _logger?.LogInformation("SOCKS5 connection established to {Target}:{Port} via {SocksHost}:{SocksPort}",
                     targetHost, targetPort, _socksHost, _socksPort);
@@ -151,22 +151,22 @@ namespace LocalProxyServer
             };
         }
 
-        private async Task ReadExactlyAsync(Stream stream, byte[] buffer)
+        private async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
         {
             int totalRead = 0;
             while (totalRead < buffer.Length)
             {
-                int read = await stream.ReadAsync(buffer, totalRead, buffer.Length - totalRead);
+                int read = await stream.ReadAsync(buffer.AsMemory(totalRead, buffer.Length - totalRead), cancellationToken);
                 if (read == 0)
                     throw new EndOfStreamException();
                 totalRead += read;
             }
         }
 
-        private async Task<byte> ReadByteAsync(Stream stream)
+        private async Task<byte> ReadByteAsync(Stream stream, CancellationToken cancellationToken)
         {
             var buf = new byte[1];
-            await ReadExactlyAsync(stream, buf);
+            await ReadExactlyAsync(stream, buf, cancellationToken);
             return buf[0];
         }
     }
