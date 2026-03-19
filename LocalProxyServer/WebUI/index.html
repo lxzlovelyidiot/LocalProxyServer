@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalProxyServer WebUI</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>LPS Admin</h2>
+                <div class="version-badge">v1.0</div>
+            </div>
+            <nav class="nav-menu">
+                <a href="#overview" class="nav-item active" data-page="overview">
+                    <span class="icon">📊</span> Overview
+                </a>
+                <a href="#proxy" class="nav-item" data-page="proxy">
+                    <span class="icon">⚡</span> Proxy Config
+                </a>
+                <a href="#upstreams" class="nav-item" data-page="upstreams">
+                    <span class="icon">🌍</span> Upstreams
+                </a>
+                <a href="#dns" class="nav-item" data-page="dns">
+                    <span class="icon">🔍</span> DNS Config
+                </a>
+                <a href="#logs" class="nav-item" data-page="logs">
+                    <span class="icon">📝</span> Live Logs
+                </a>
+                <a href="#certificate" class="nav-item" data-page="certificate">
+                    <span class="icon">🔐</span> Certificate
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <header class="top-header">
+                <h1 id="page-title">Overview</h1>
+                <div class="header-actions">
+                    <button id="btn-toggle-theme" class="btn" style="background:var(--hover-bg);color:var(--text-primary)">🌓 Theme</button>
+                    <button id="btn-restart-proxy" class="btn btn-warning">Restart Proxy</button>
+                    <button id="btn-restart-dns" class="btn btn-warning">Restart DNS</button>
+                </div>
+            </header>
+
+            <div class="content-body" id="pages-container">
+                <!-- Pages will be injected here by app.js -->
+            </div>
+            
+        </main>
+    </div>
+
+    <!-- Notification Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="js/api.js"></script>
+    <script src="js/components.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
