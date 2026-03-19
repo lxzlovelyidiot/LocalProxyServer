@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-
 namespace LocalProxyServer
 {
     public enum ServiceStatus { Stopped, Starting, Running, Error }
@@ -157,7 +156,7 @@ namespace LocalProxyServer
         public Task StopProxyAsync()
         {
             if (ProxyStatus == ServiceStatus.Stopped) return Task.CompletedTask;
-            
+
             _proxy?.Stop();
             _proxy = null;
 
@@ -219,7 +218,7 @@ namespace LocalProxyServer
         public Task StopDnsAsync()
         {
             if (DnsStatus == ServiceStatus.Stopped) return Task.CompletedTask;
-            
+
             _dnsServer?.Stop();
             _dnsServer = null;
 
@@ -257,7 +256,7 @@ namespace LocalProxyServer
                 var allConfigs = new List<UpstreamConfiguration>();
                 if (ProxyConfig?.Upstream != null) allConfigs.Add(ProxyConfig.Upstream);
                 if (ProxyConfig?.Upstreams != null) allConfigs.AddRange(ProxyConfig.Upstreams);
-                
+
                 for (int i = 0; i < allConfigs.Count; i++)
                 {
                     var config = allConfigs[i];
@@ -303,14 +302,35 @@ namespace LocalProxyServer
         private void UpdateJsonConfig<T>(string sectionName, T newConfig)
         {
             var filePath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            if (!File.Exists(filePath)) filePath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
             if (!File.Exists(filePath)) filePath = "appsettings.json";
 
-            var json = File.ReadAllText(filePath);
-            var jsonObj = JsonNode.Parse(json) as JsonObject;
-            if (jsonObj != null)
+            if (!File.Exists(filePath))
             {
-                jsonObj[sectionName] = JsonSerializer.SerializeToNode(newConfig, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(filePath, jsonObj.ToString());
+                _logger.LogWarning("appsettings.json not found at {Path}, skipping update.", filePath);
+                return;
+            }
+
+            try
+            {
+                var json = File.ReadAllText(filePath);
+                var jsonObj = JsonNode.Parse(json) as JsonObject;
+                if (jsonObj != null)
+                {
+                    // Use the source-generated context for serialization to avoid reflection issues (especially in AOT)
+                    var node = JsonSerializer.SerializeToNode(newConfig, typeof(T), WebUIJsonContext.Default);
+                    if (node != null)
+                    {
+                        jsonObj[sectionName] = node;
+                        File.WriteAllText(filePath, jsonObj.ToString());
+                        _logger.LogInformation("Successfully updated {Section} in {Path}", sectionName, filePath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update appsettings.json section {Section}", sectionName);
+                throw; // Rethrow to let the API return 500 with details if configured
             }
         }
 

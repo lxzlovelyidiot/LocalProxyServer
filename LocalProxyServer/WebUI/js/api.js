@@ -3,6 +3,8 @@ const API = {
     async getProxyConfig() { return await this.request('/api/config/proxy'); },
     async updateProxyConfig(data) { return await this.request('/api/config/proxy', 'PUT', data); },
     async getUpstreams() { return await this.request('/api/config/proxy/upstreams'); },
+    async getUpstream(index) { return await this.request(`/api/config/proxy/upstreams/${index}`); },
+
     async addUpstream(data) { return await this.request('/api/config/proxy/upstreams', 'POST', data); },
     async updateUpstream(index, data) { return await this.request(`/api/config/proxy/upstreams/${index}`, 'PUT', data); },
     async deleteUpstream(index) { return await this.request(`/api/config/proxy/upstreams/${index}`, 'DELETE'); },
@@ -15,7 +17,7 @@ const API = {
     async stopDns() { return await this.request('/api/dns/stop', 'POST'); },
     async getCertificate() { return await this.request('/api/certificate'); },
     async regenerateCertificate() { return await this.request('/api/certificate/regenerate', 'POST'); },
-    
+
     async request(url, method = 'GET', body = null) {
         const options = { method, headers: { 'Content-Type': 'application/json' } };
         if (body) options.body = JSON.stringify(body);

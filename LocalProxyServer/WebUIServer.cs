@@ -124,16 +124,16 @@ namespace LocalProxyServer
             });
 
             app.MapGet("/api/config/proxy/upstreams", () => Results.Ok(ServiceManager.Instance.UpstreamStatuses));
-            
+
             app.MapGet("/api/config/proxy/upstreams/{index}", (int index) => 
             {
                 var upstreams = ServiceManager.Instance.UpstreamStatuses;
                 if (index < 0 || index >= upstreams.Count) return Results.NotFound();
-                
+
                 var configList = new List<UpstreamConfiguration>();
                 if (ServiceManager.Instance.ProxyConfig?.Upstream != null) configList.Add(ServiceManager.Instance.ProxyConfig.Upstream);
                 if (ServiceManager.Instance.ProxyConfig?.Upstreams != null) configList.AddRange(ServiceManager.Instance.ProxyConfig.Upstreams);
-                
+
                 return configList.Count > index ? Results.Ok(configList[index]) : Results.NotFound();
             });
 
@@ -150,7 +150,7 @@ namespace LocalProxyServer
             {
                 var config = ServiceManager.Instance.ProxyConfig;
                 if (config == null) return Results.NotFound();
-                
+
                 if (index == 0 && config.Upstream != null)
                 {
                     config.Upstream = updatedUpstream;
@@ -169,7 +169,7 @@ namespace LocalProxyServer
             {
                 var config = ServiceManager.Instance.ProxyConfig;
                 if (config == null) return Results.NotFound();
-                
+
                 if (index == 0 && config.Upstream != null)
                 {
                     config.Upstream = null;
@@ -196,13 +196,13 @@ namespace LocalProxyServer
                 await ServiceManager.Instance.StartProxyAsync(ct);
                 return Results.Ok(new SuccessResponse(true, false, "Proxy server started"));
             });
-            
+
             app.MapPost("/api/proxy/stop", async () => 
             {
                 await ServiceManager.Instance.StopProxyAsync();
                 return Results.Ok(new SuccessResponse(true, false, "Proxy server stopped"));
             });
-            
+
             app.MapPost("/api/proxy/restart", async (CancellationToken ct) => 
             {
                 await ServiceManager.Instance.RestartProxyAsync(ct);
@@ -214,7 +214,7 @@ namespace LocalProxyServer
                 await ServiceManager.Instance.StartDnsAsync(ct);
                 return Results.Ok(new SuccessResponse(true, false, "DNS server started"));
             });
-            
+
             app.MapPost("/api/dns/stop", async () => 
             {
                 await ServiceManager.Instance.StopDnsAsync();

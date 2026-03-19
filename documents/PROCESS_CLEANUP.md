@@ -165,10 +165,10 @@ private static void Cleanup()
 {
     // 1. Stop proxy server
     _proxy?.Stop();
-    
+
     // 2. Stop CRL server
     _crlServer?.Stop();
-    
+
     // 3. Stop upstream process (disables monitoring and kills process)
     _upstreamProcess?.Stop();
 }

@@ -100,7 +100,7 @@ namespace LocalProxyServer
             }
 
             Cleanup();
-            
+
             if (enableWebUI)
             {
                 await WebUIServer.StopAsync();

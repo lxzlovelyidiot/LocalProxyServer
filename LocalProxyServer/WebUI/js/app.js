@@ -62,7 +62,6 @@ const Pages = {
                     </div>
                     <button id="btn-save-proxy" class="btn btn-primary">Save Changes</button>
                     ${UI.renderWarningRestart()}
-                    
                     <div style="margin-top:20px; color:var(--text-secondary)">
                         <p>Note: Upstreams are managed in the Upstreams tab.</p>
                     </div>
@@ -85,59 +84,197 @@ const Pages = {
 
     async renderUpstreams(container) {
         document.getElementById('page-title').innerText = 'Upstreams Management';
-        try {
-            const upstreams = await API.getUpstreams();
-            let rows = '';
-            upstreams.forEach((u, ix) => {
-                rows += `
-                <tr>
-                    <td>#${ix}</td>
-                    <td>${UI.renderStatusBadge(u.enabled)}</td>
-                    <td>${u.type}</td>
-                    <td>${u.host}:${u.port}</td>
-                    <td>${UI.renderStatusBadge(u.processRunning)} ${u.processRunning ? `(PID: ${u.processId})` : ''}</td>
-                    <td>${u.healthCheckEnabled ? UI.renderStatusBadge(u.lastHealthCheckResult) : 'N/A'}</td>
-                    <td>
-                        <button class="btn btn-warning" onclick="alert('Edit logic WIP')">Edit</button>
-                        <button class="btn btn-danger" onclick="deleteUpstream(${ix})">Delete</button>
-                    </td>
-                </tr>`;
-            });
 
-            container.innerHTML = `
-                <div class="card">
-                    <div style="margin-bottom:16px"><button class="btn btn-primary">Add Upstream</button></div>
-                    <div class="table-wrapper">
-                        <table class="table">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>Enabled</th>
-                                    <th>Type</th>
-                                    <th>Endpoint</th>
-                                    <th>Process</th>
-                                    <th>Health</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>${rows || '<tr><td colspan="7">No upstreams configured</td></tr>'}</tbody>
-                        </table>
+        const renderTable = async () => {
+            try {
+                const upstreams = await API.getUpstreams();
+                let rows = '';
+                upstreams.forEach((u, ix) => {
+                    rows += `
+                    <tr>
+                        <td>#${ix}</td>
+                        <td>${UI.renderStatusBadge(u.enabled)}</td>
+                        <td>${u.type}</td>
+                        <td>${u.host}:${u.port}</td>
+                        <td>${UI.renderStatusBadge(u.processRunning)} ${u.processRunning ? `(PID: ${u.processId})` : ''}</td>
+                        <td>${u.healthCheckEnabled ? UI.renderStatusBadge(u.lastHealthCheckResult) : 'N/A'}</td>
+                        <td>
+                            <button class="btn btn-warning btn-sm" onclick="editUpstream(${ix})">Edit</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteUpstream(${ix})">Delete</button>
+                        </td>
+                    </tr>`;
+                });
+
+                container.innerHTML = `
+                    <div class="card">
+                        <div style="margin-bottom:16px"><button id="btn-add-upstream" class="btn btn-primary">Add Upstream</button></div>
+                        <div class="table-wrapper">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Enabled</th>
+                                        <th>Type</th>
+                                        <th>Endpoint</th>
+                                        <th>Process</th>
+                                        <th>Health</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${rows || '<tr><td colspan="7">No upstreams configured</td></tr>'}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('btn-add-upstream').onclick = () => Pages.showUpstreamModal(container);
+            } catch (e) { UI.showToast(e.message, 'error'); }
+        };
+
+        window.editUpstream = async (ix) => {
+            try {
+                const config = await API.getUpstream(ix);
+                Pages.showUpstreamModal(container, config, ix);
+            } catch (e) { UI.showToast(e.message, 'error'); }
+        };
+
+        window.deleteUpstream = async (ix) => {
+            if (confirm('Are you sure you want to delete this upstream?')) {
+                try {
+                    await API.deleteUpstream(ix);
+                    UI.showToast('Deleted');
+                    await renderTable();
+                } catch (e) { UI.showToast(e.message, 'error'); }
+            }
+        };
+
+        await renderTable();
+    },
+    showUpstreamModal(container, config = null, index = -1) {
+        const isEdit = index >= 0;
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+
+        const cfg = config || {
+            type: 'socks5',
+            host: '127.0.0.1',
+            port: 1080,
+            enabled: true,
+            process: { autoStart: false, fileName: '', arguments: '', workingDirectory: '' },
+            healthCheck: { enabled: false, intervalMs: 30000, timeoutMs: 5000, failureThreshold: 3 }
+        };
+
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>${isEdit ? 'Edit Upstream' : 'Add New Upstream'}</h3>
+                    <button class="btn" style="background:none; font-size:1.5rem;" onclick="this.closest('.modal-overlay').remove()">×</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Type</label>
+                            <select id="up-type" class="form-control">
+                                <option value="socks5" ${cfg.type === 'socks5' ? 'selected' : ''}>SOCKS5</option>
+                                <option value="http" ${cfg.type === 'http' ? 'selected' : ''}>HTTP</option>
+                                <option value="direct" ${cfg.type === 'direct' ? 'selected' : ''}>Direct</option>
+                                <option value="daemon" ${cfg.type === 'daemon' ? 'selected' : ''}>Daemon</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex:2">
+                            <label class="form-label">Host</label>
+                            <input type="text" id="up-host" class="form-control" value="${cfg.host || ''}" placeholder="127.0.0.1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Port</label>
+                            <input type="number" id="up-port" class="form-control" value="${cfg.port || ''}" placeholder="1080">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-group">
+                            <input type="checkbox" id="up-enabled" ${cfg.enabled ? 'checked' : ''}> Enabled
+                        </label>
+                    </div>
+
+                    <div class="section-divider"><span>Process Management</span></div>
+                    <div class="form-group">
+                        <label class="checkbox-group">
+                            <input type="checkbox" id="up-proc-auto" ${cfg.process?.autoStart ? 'checked' : ''}> Auto-start upstream process
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Executable Path</label>
+                        <input type="text" id="up-proc-file" class="form-control" value="${cfg.process?.fileName || ''}" placeholder="C:\\path\\to\\proxy.exe">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Arguments</label>
+                            <input type="text" id="up-proc-args" class="form-control" value="${cfg.process?.arguments || ''}" placeholder="-c config.json">
+                        </div>
+                    </div>
+
+                    <div class="section-divider"><span>Health Check</span></div>
+                    <div class="form-group">
+                        <label class="checkbox-group">
+                            <input type="checkbox" id="up-hc-enabled" ${cfg.healthCheck?.enabled ? 'checked' : ''}> Enable Periodic Health Check
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Interval (ms)</label>
+                            <input type="number" id="up-hc-interval" class="form-control" value="${cfg.healthCheck?.intervalMs || 30000}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Timeout (ms)</label>
+                            <input type="number" id="up-hc-timeout" class="form-control" value="${cfg.healthCheck?.timeoutMs || 5000}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Fail Threshold</label>
+                            <input type="number" id="up-hc-threshold" class="form-control" value="${cfg.healthCheck?.failureThreshold || 3}">
+                        </div>
                     </div>
                 </div>
-            `;
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                    <button id="btn-modal-save" class="btn btn-primary">Save Upstream</button>
+                </div>
+            </div>
+        `;
 
-            window.deleteUpstream = async (ix) => {
-                if (confirm('Are you sure you want to delete this upstream?')) {
-                    try {
-                        await API.deleteUpstream(ix);
-                        UI.showToast('Deleted');
-                        await Pages.renderUpstreams(container);
-                    } catch (e) { UI.showToast(e.message, 'error'); }
+        document.body.appendChild(modal);
+
+        document.getElementById('btn-modal-save').onclick = async () => {
+            const data = {
+                type: document.getElementById('up-type').value,
+                host: document.getElementById('up-host').value,
+                port: parseInt(document.getElementById('up-port').value),
+                enabled: document.getElementById('up-enabled').checked,
+                process: {
+                    autoStart: document.getElementById('up-proc-auto').checked,
+                    fileName: document.getElementById('up-proc-file').value,
+                    arguments: document.getElementById('up-proc-args').value,
+                    redirectOutput: true,
+                    autoRestart: true
+                },
+                healthCheck: {
+                    enabled: document.getElementById('up-hc-enabled').checked,
+                    intervalMs: parseInt(document.getElementById('up-hc-interval').value),
+                    timeoutMs: parseInt(document.getElementById('up-hc-timeout').value),
+                    failureThreshold: parseInt(document.getElementById('up-hc-threshold').value)
                 }
             };
-        } catch (e) { UI.showToast(e.message, 'error'); }
-    },
 
+            try {
+                if (isEdit) await API.updateUpstream(index, data);
+                else await API.addUpstream(data);
+
+                UI.showToast(isEdit ? 'Updated' : 'Added');
+                modal.remove();
+                await Pages.renderUpstreams(container);
+            } catch (e) { UI.showToast(e.message, 'error'); }
+        };
+    },
     async renderDns(container) {
         document.getElementById('page-title').innerText = 'DNS Configuration';
         try {
@@ -172,7 +309,6 @@ const Pages = {
             };
         } catch (e) { UI.showToast(e.message, 'error'); }
     },
-
     async renderCertificate(container) {
         document.getElementById('page-title').innerText = 'Certificate Management';
         try {
@@ -212,7 +348,6 @@ const Pages = {
             };
         } catch (e) { UI.showToast(e.message, 'error'); }
     },
-
     async renderLogs(container) {
         document.getElementById('page-title').innerText = 'Live Logs';
         container.innerHTML = `
@@ -349,7 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Global Actions
     document.getElementById('btn-restart-proxy').onclick = async () => {
-        try { await API.restartProxy(); UI.showToast('Proxy restarted'); }
+        try { await API.restartProxy(); UI.showToast('Upstreams restarted'); }
         catch (e) { UI.showToast(e.message, 'error'); }
     };
 

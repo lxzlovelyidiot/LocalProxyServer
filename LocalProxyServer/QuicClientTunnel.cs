@@ -126,7 +126,7 @@ public static class QuicClientTunnel
                 {
                     Console.WriteLine($"[TCP] Client connected from {tcpClient.Client.RemoteEndPoint}");
                     await using var networkStream = tcpClient.GetStream();
-                    
+
                     // Attempt to multiplex over the existing connection
                     QuicStream? quicStream = null;
                     int retries = 0;
