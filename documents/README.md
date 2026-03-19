@@ -92,6 +92,20 @@ dotnet run --environment Production
 dotnet run
 ```
 
+## Web Management Interface (WebUI)
+
+LocalProxyServer includes a built-in graphical dashboard for real-time monitoring and configuration without editing JSON files.
+You can rapidly enable it by starting the proxy with the `--webui` flag:
+
+```bash
+dotnet run -- --webui
+```
+
+Access the dashboard at **[https://localhost:9090](https://localhost:9090)**.  
+*Note: You must trust the Windows `LocalProxyServer-CA` certificate to access the UI securely.*
+
+For more details, see the [WebUI Documentation](WEBUI.md).
+
 ## Browser Configuration
 
 ### Chrome/Edge
@@ -566,6 +580,7 @@ Modify `appsettings.json`:
 
 ## Additional Documentation
 
+- [Web Management Interface (WebUI)](WEBUI.md)
 - [Upstream Proxy Configuration & Multi-Upstream Setup](#upstream-proxy-configuration)
 - [DNS Server (DoH + SOCKS5 Upstream)](DNS_SERVER.md)
 - [Process Management and Auto-restart](PROCESS_CLEANUP.md)

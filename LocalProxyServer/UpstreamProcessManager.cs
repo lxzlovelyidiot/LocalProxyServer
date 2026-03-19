@@ -25,9 +25,16 @@ namespace LocalProxyServer
         private Task? _healthCheckTask;
         private JobObject? _jobObject;
 
+        public UpstreamConfiguration Configuration { get; }
+        public int? ProcessId => _process != null && !_process.HasExited ? _process.Id : null;
+        public bool ProcessRunning => _process != null && !_process.HasExited;
+        public int RestartCount => _restartAttempts;
+        public bool? LastHealthCheckResult { get; private set; } // We should ideally update this in HealthCheckLoopAsync
+
         public UpstreamProcessManager(UpstreamConfiguration upstream, ILogger? logger = null)
         {
             ArgumentNullException.ThrowIfNull(upstream);
+            Configuration = upstream;
             if (upstream.Process == null)
                 throw new ArgumentException("Upstream must have a Process configuration.", nameof(upstream));
 
@@ -279,6 +286,7 @@ namespace LocalProxyServer
             while (!cancellationToken.IsCancellationRequested && !_isStopping)
             {
                 bool healthy = await ProbeUpstreamAsync(cancellationToken);
+                LastHealthCheckResult = healthy;
 
                 if (healthy)
                 {
