@@ -345,7 +345,17 @@ namespace LocalProxyServer
 
         public Task RegenerateCertificateAsync()
         {
-            // Not implemented entirely based on existing codebase structure
+            try
+            {
+                _logger.LogInformation("Regenerating Root CA via WebUI request (requesting elevation)...");
+                string? crlDistributionUrl = ProxyConfig?.CrlPort > 0 ? $"http://127.0.0.1:{ProxyConfig.CrlPort}/crl.der" : null;
+                CertificateManager.InstallRootCa(crlDistributionUrl, forceRegenerate: true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to regenerate sequence");
+            }
+
             return Task.CompletedTask;
         }
     }

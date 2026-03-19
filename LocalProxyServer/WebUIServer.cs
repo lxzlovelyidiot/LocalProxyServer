@@ -24,6 +24,7 @@ namespace LocalProxyServer
     [JsonSerializable(typeof(DnsConfiguration))]
     [JsonSerializable(typeof(ConfigUpdateResponse<DnsConfiguration>))]
     [JsonSerializable(typeof(CertificateInfo))]
+    [JsonSerializable(typeof(LogEntry))]
     public partial class WebUIJsonContext : JsonSerializerContext
     {
     }

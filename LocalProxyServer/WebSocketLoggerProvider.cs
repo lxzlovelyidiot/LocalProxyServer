@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
 namespace LocalProxyServer
@@ -54,6 +55,54 @@ namespace LocalProxyServer
     public static class WebSocketLogBroadcaster
     {
         private static readonly ConcurrentDictionary<Guid, (WebSocket Socket, LogLevel MinLevel)> _clients = new();
+        private static readonly Channel<LogEntry> _logChannel = Channel.CreateBounded<LogEntry>(new BoundedChannelOptions(1000) { FullMode = BoundedChannelFullMode.DropOldest });
+
+        static WebSocketLogBroadcaster()
+        {
+            _ = Task.Run(ProcessLogsAsync);
+        }
+
+        private static async Task ProcessLogsAsync()
+        {
+            await foreach (var entry in _logChannel.Reader.ReadAllAsync())
+            {
+                if (_clients.IsEmpty) continue;
+                if (!Enum.TryParse<LogLevel>(entry.Level, out var entryLevel)) continue;
+
+                var messageBytes = JsonSerializer.SerializeToUtf8Bytes(entry, WebUIJsonContext.Default.LogEntry);
+
+                var deadClients = new List<Guid>();
+                foreach (var kvp in _clients)
+                {
+                    var id = kvp.Key;
+                    var client = kvp.Value;
+
+                    if (client.Socket.State != WebSocketState.Open || entryLevel < client.MinLevel)
+                    {
+                        if (client.Socket.State is WebSocketState.Closed or WebSocketState.Aborted)
+                        {
+                            deadClients.Add(id);
+                        }
+                        continue;
+                    }
+
+                    try
+                    {
+                        var sendTask = client.Socket.SendAsync(new ArraySegment<byte>(messageBytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                        // Optional: Timeout or fire-forget
+                    }
+                    catch
+                    {
+                        deadClients.Add(id);
+                    }
+                }
+
+                foreach (var dead in deadClients)
+                {
+                    _clients.TryRemove(dead, out _);
+                }
+            }
+        }
 
         public static async Task HandleWebSocketAsync(WebSocket webSocket, LogLevel minLevel)
         {
@@ -86,50 +135,7 @@ namespace LocalProxyServer
         public static void BroadcastLog(LogEntry entry)
         {
             if (_clients.IsEmpty) return;
-
-            if (!Enum.TryParse<LogLevel>(entry.Level, out var entryLevel)) return;
-
-            var messageJson = JsonSerializer.Serialize(entry, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-            var messageBytes = Encoding.UTF8.GetBytes(messageJson);
-
-            // Fire and forget
-            Task.Run(async () =>
-            {
-                var deadClients = new List<Guid>();
-
-                foreach (var kvp in _clients)
-                {
-                    var id = kvp.Key;
-                    var client = kvp.Value;
-
-                    if (client.Socket.State != WebSocketState.Open || entryLevel < client.MinLevel)
-                    {
-                        if (client.Socket.State is WebSocketState.Closed or WebSocketState.Aborted)
-                        {
-                            deadClients.Add(id);
-                        }
-                        continue;
-                    }
-
-                    try
-                    {
-                        await client.Socket.SendAsync(
-                            new ArraySegment<byte>(messageBytes),
-                            WebSocketMessageType.Text,
-                            true,
-                            CancellationToken.None);
-                    }
-                    catch
-                    {
-                        deadClients.Add(id);
-                    }
-                }
-
-                foreach (var dead in deadClients)
-                {
-                    _clients.TryRemove(dead, out _);
-                }
-            });
+            _logChannel.Writer.TryWrite(entry);
         }
     }
 }

@@ -31,7 +31,7 @@ const Pages = {
             UI.showToast('Failed to load overview: ' + e.message, 'error');
         }
     },
-    
+
     async renderProxy(container) {
         document.getElementById('page-title').innerText = 'Proxy Configuration';
         try {
@@ -78,11 +78,11 @@ const Pages = {
                 try {
                     await API.updateProxyConfig(newCfg);
                     UI.showToast('Configuration saved.');
-                } catch(e) { UI.showToast(e.message, 'error'); }
+                } catch (e) { UI.showToast(e.message, 'error'); }
             };
-        } catch(e) { UI.showToast(e.message, 'error'); }
+        } catch (e) { UI.showToast(e.message, 'error'); }
     },
-    
+
     async renderUpstreams(container) {
         document.getElementById('page-title').innerText = 'Upstreams Management';
         try {
@@ -103,7 +103,7 @@ const Pages = {
                     </td>
                 </tr>`;
             });
-            
+
             container.innerHTML = `
                 <div class="card">
                     <div style="margin-bottom:16px"><button class="btn btn-primary">Add Upstream</button></div>
@@ -125,19 +125,19 @@ const Pages = {
                     </div>
                 </div>
             `;
-            
+
             window.deleteUpstream = async (ix) => {
-                if(confirm('Are you sure you want to delete this upstream?')) {
+                if (confirm('Are you sure you want to delete this upstream?')) {
                     try {
                         await API.deleteUpstream(ix);
                         UI.showToast('Deleted');
                         await Pages.renderUpstreams(container);
-                    } catch(e) { UI.showToast(e.message, 'error'); }
+                    } catch (e) { UI.showToast(e.message, 'error'); }
                 }
             };
-        } catch(e) { UI.showToast(e.message, 'error'); }
+        } catch (e) { UI.showToast(e.message, 'error'); }
     },
-    
+
     async renderDns(container) {
         document.getElementById('page-title').innerText = 'DNS Configuration';
         try {
@@ -160,18 +160,19 @@ const Pages = {
                 </div>
             `;
             document.getElementById('btn-save-dns').onclick = async () => {
-                const newCfg = { ...cfg,
+                const newCfg = {
+                    ...cfg,
                     enabled: document.getElementById('dns-enabled').value === 'true',
                     port: parseInt(document.getElementById('dns-port').value)
                 };
                 try {
                     await API.updateDnsConfig(newCfg);
                     UI.showToast('Configuration saved.');
-                } catch(e) { UI.showToast(e.message, 'error'); }
+                } catch (e) { UI.showToast(e.message, 'error'); }
             };
-        } catch(e) { UI.showToast(e.message, 'error'); }
+        } catch (e) { UI.showToast(e.message, 'error'); }
     },
-    
+
     async renderCertificate(container) {
         document.getElementById('page-title').innerText = 'Certificate Management';
         try {
@@ -199,17 +200,17 @@ const Pages = {
                     </div>
                 </div>
             `;
-            
+
             document.getElementById('btn-regen-cert').onclick = async () => {
-                if(confirm('Are you sure? This requires proxy restart and re-installing the CA in your OS.')) {
+                if (confirm('Are you sure? This requires proxy restart and re-installing the CA in your OS.')) {
                     try {
                         await API.regenerateCertificate();
                         UI.showToast('Regenerated. You must restart the proxy.');
                         await Pages.renderCertificate(container);
-                    } catch(e) { UI.showToast(e.message, 'error'); }
+                    } catch (e) { UI.showToast(e.message, 'error'); }
                 }
             };
-        } catch(e) { UI.showToast(e.message, 'error'); }
+        } catch (e) { UI.showToast(e.message, 'error'); }
     },
 
     async renderLogs(container) {
@@ -231,23 +232,43 @@ const Pages = {
                 <div id="log-output" class="log-container"></div>
             </div>
         `;
-        
+
         const logOutput = document.getElementById('log-output');
         let isPaused = false;
-        
+
         document.getElementById('btn-clear-logs').onclick = () => logOutput.innerHTML = '';
         document.getElementById('btn-toggle-logs').onclick = (e) => {
             isPaused = !isPaused;
             e.target.innerText = isPaused ? 'Resume' : 'Pause';
         };
-        
+
         const connectWs = () => {
             if (currentWs) currentWs.close();
+
+            // Clear old logs from the screen when changing the connection
+            if (logOutput) {
+                logOutput.innerHTML = '';
+            }
+
             const level = document.getElementById('log-level').value;
             const wsUrl = `wss://${location.host}/ws/logs?level=${level}`;
-            currentWs = new WebSocket(wsUrl);
-            
-            currentWs.onmessage = (e) => {
+            const ws = new WebSocket(wsUrl);
+            currentWs = ws;
+
+            const ls = document.getElementById('log-status');
+            if (ls) {
+                ls.innerText = 'Connecting...';
+                ls.style.color = 'var(--warning-color)';
+            }
+
+            ws.onopen = () => {
+                if (currentWs === ws && ls) {
+                    ls.innerText = 'Connected';
+                    ls.style.color = 'var(--success-color)';
+                }
+            };
+
+            ws.onmessage = (e) => {
                 if (isPaused) return;
                 const log = JSON.parse(e.data);
                 const div = document.createElement('div');
@@ -262,16 +283,15 @@ const Pages = {
                 if (logOutput.childNodes.length > 1000) logOutput.removeChild(logOutput.firstChild);
                 logOutput.scrollTop = logOutput.scrollHeight;
             };
-            
-            currentWs.onclose = () => {
-                const ls = document.getElementById('log-status');
-                if (ls) {
+
+            ws.onclose = () => {
+                if (currentWs === ws && ls) {
                     ls.innerText = 'Disconnected';
                     ls.style.color = 'var(--danger-color)';
                 }
             };
         };
-        
+
         document.getElementById('log-level').onchange = connectWs;
         connectWs();
     }
@@ -279,14 +299,14 @@ const Pages = {
 
 async function handleNavigation(pageId) {
     if (currentWs) { currentWs.close(); currentWs = null; }
-    
+
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     const link = document.querySelector(`.nav-item[data-page="${pageId}"]`);
-    if(link) link.classList.add('active');
-    
+    if (link) link.classList.add('active');
+
     const container = document.getElementById('pages-container');
     container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-secondary)">Loading...</div>';
-    
+
     if (pageId === 'overview') await Pages.renderOverview(container);
     else if (pageId === 'proxy') await Pages.renderProxy(container);
     else if (pageId === 'upstreams') await Pages.renderUpstreams(container);
@@ -307,7 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const initialPage = window.location.hash.replace('#', '') || 'overview';
     handleNavigation(initialPage);
-    
+
     // Theme Management
     const themeBtn = document.getElementById('btn-toggle-theme');
     const setLight = (isLight) => {
@@ -315,26 +335,26 @@ document.addEventListener('DOMContentLoaded', () => {
         else document.documentElement.removeAttribute('data-theme');
         localStorage.setItem('theme', isLight ? 'light' : 'dark');
     };
-    
+
     // Init theme
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'light') setLight(true);
-    
+
     if (themeBtn) {
         themeBtn.onclick = () => {
             const isLight = document.documentElement.getAttribute('data-theme') !== 'light';
             setLight(isLight);
         };
     }
-    
+
     // Global Actions
     document.getElementById('btn-restart-proxy').onclick = async () => {
         try { await API.restartProxy(); UI.showToast('Proxy restarted'); }
-        catch(e) { UI.showToast(e.message, 'error'); }
+        catch (e) { UI.showToast(e.message, 'error'); }
     };
-    
+
     document.getElementById('btn-restart-dns').onclick = async () => {
         try { await API.stopDns(); await API.startDns(); UI.showToast('DNS restarted'); }
-        catch(e) { UI.showToast(e.message, 'error'); }
+        catch (e) { UI.showToast(e.message, 'error'); }
     };
 });

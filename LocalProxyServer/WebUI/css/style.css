@@ -281,6 +281,7 @@ body {
 /* Logs View */
 .log-container {
     background-color: #000;
+    color: #f8fafc;
     border-radius: 8px;
     padding: 16px;
     height: 500px;

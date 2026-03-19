@@ -47,6 +47,68 @@ namespace LocalProxyServer
         }
 
         /// <summary>
+        /// Explicitly generates (if missing) and installs the Root CA.
+        /// </summary>
+        public static void InstallRootCa(string? crlDistributionUrl = null, bool forceRegenerate = false)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                var args = Environment.GetCommandLineArgs();
+
+                if (!principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator) && !args.Contains("--admin"))
+                {
+                    Console.WriteLine("Administrator privileges required to install Root CA. Requesting elevation...");
+                    var processPath = Environment.ProcessPath;
+
+                    if (processPath == null) return;
+
+                    bool isDotNet = System.IO.Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase);
+                    var argsToPass = isDotNet ? args : args.Skip(1)!;
+                    var argumentString = string.Join(" ", argsToPass.Select(a => $"\"{a}\"")) + " --admin";
+                    if (forceRegenerate && !argumentString.Contains("--force-regenerate"))
+                    {
+                        argumentString += " --force-regenerate";
+                    }
+
+                    var startInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = processPath,
+                        Arguments = argumentString,
+                        UseShellExecute = true,
+                        Verb = "runas"
+                    };
+
+                    try
+                    {
+                        using var process = System.Diagnostics.Process.Start(startInfo);
+                        process?.WaitForExit();
+                    }
+                    catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+                    {
+                        Console.WriteLine("Elevation request was cancelled by the user.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to start elevated process: {ex.Message}");
+                    }
+                    return;
+                }
+            }
+
+            if (forceRegenerate)
+            {
+                DeleteRootCa();
+            }
+
+            var rootCa = GetOrCreateRootCa(crlDistributionUrl);
+            Console.WriteLine($"Root CA Subject: {rootCa.Subject}");
+            Console.WriteLine($"Root CA Thumbprint: {rootCa.Thumbprint}");
+            Console.WriteLine("Installation sequence complete.");
+        }
+
+        /// <summary>
         /// Uses Root CA to issue an empty CRL (DER format) for the CRL distribution endpoint to return.
         /// </summary>
         public static byte[] BuildEmptyCrl(X509Certificate2 rootCa)
@@ -123,6 +185,21 @@ namespace LocalProxyServer
             InstallToTrustedRoot(finalCert);
 
             return finalCert;
+        }
+
+        /// <summary>
+        /// Deletes the Root CA from CurrentUser store and attempts removal from Trusted Root.
+        /// </summary>
+        public static void DeleteRootCa()
+        {
+            using var store = new X509Store(StoreName.My, StoreLocation.CurrentUser);
+            store.Open(OpenFlags.ReadWrite);
+            var existing = store.Certificates.Find(X509FindType.FindBySubjectName, CaName, false);
+            foreach (var current in existing)
+            {
+                store.Remove(current);
+                TryRemoveFromTrustedRoot(current);
+            }
         }
 
         private static void TryRemoveFromTrustedRoot(X509Certificate2 cert)

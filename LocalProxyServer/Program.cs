@@ -21,6 +21,14 @@ namespace LocalProxyServer
         [SupportedOSPlatform("linux")]
         public static async Task Main(string[] args)
         {
+            if (args.Contains("--install-ca"))
+            {
+                Console.WriteLine("Attempting to install LocalProxyServer Root CA...");
+                bool forceRegen = args.Contains("--force-regenerate");
+                CertificateManager.InstallRootCa(forceRegenerate: forceRegen);
+                return;
+            }
+
             if (args.Length >= 4 && args[0] == "client" && args[1] == "tunnel" && args[2] == "--server")
             {
                 string? listenEndpoint = null;
