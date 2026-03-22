@@ -30,7 +30,7 @@ namespace LocalProxyServer
 
             if (!string.IsNullOrEmpty(config.DefaultDohEndpoint) && Uri.TryCreate(config.DefaultDohEndpoint, UriKind.Absolute, out var defaultUri))
             {
-                // Default DoH usually goes direct, not through SOCKS5 upstream (unless explicitly desired, but here we assume direct)
+                // Default DoH goes direct, not through SOCKS5 upstream (assumes direct connection for non-pattern queries)
                 _defaultDohClient = new DnsOverHttpsClient(defaultUri, Array.Empty<Socks5Client>(), config.TimeoutMs, logger, config.GetPreferredAddressFamily());
             }
         }
@@ -420,6 +420,7 @@ namespace LocalProxyServer
                 yield break;
             }
 
+            // Fall back to the single DohEndpoint when no DohEndpoints list is configured.
             if (Uri.TryCreate(config.DohEndpoint, UriKind.Absolute, out var single))
             {
                 yield return single;

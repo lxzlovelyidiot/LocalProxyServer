@@ -80,6 +80,65 @@ namespace LocalProxyServer
             ProxyConfig = Configuration.GetSection("Proxy").Get<ProxyConfiguration>() ?? new ProxyConfiguration();
             DnsConfig = Configuration.GetSection("Dns").Get<DnsConfiguration>() ?? new DnsConfiguration();
             WebUIConfig = Configuration.GetSection("WebUI").Get<WebUIConfiguration>() ?? new WebUIConfiguration();
+            ValidateConfiguration();
+        }
+
+        private void ValidateConfiguration()
+        {
+            // --- Proxy section ---
+            if (ProxyConfig != null)
+            {
+                if (ProxyConfig.Port <= 0)
+                    _logger.LogWarning("Configuration warning: Proxy.Port is {Port}. The proxy server will fail to bind. Check appsettings.json.", ProxyConfig.Port);
+
+                if (ProxyConfig.UseHttps && ProxyConfig.CrlPort <= 0)
+                    _logger.LogWarning("Configuration warning: Proxy.CrlPort is {Port} but UseHttps is true. CRL distribution point will be disabled.", ProxyConfig.CrlPort);
+
+                var allUpstreams = new List<UpstreamConfiguration>();
+                if (ProxyConfig.Upstream != null) allUpstreams.Add(ProxyConfig.Upstream);
+                if (ProxyConfig.Upstreams != null) allUpstreams.AddRange(ProxyConfig.Upstreams);
+
+                for (int i = 0; i < allUpstreams.Count; i++)
+                {
+                    var u = allUpstreams[i];
+                    var label = $"Proxy.Upstreams[{i}]";
+                    if (!u.Enabled) continue;
+
+                    if (string.IsNullOrWhiteSpace(u.Host))
+                        _logger.LogWarning("Configuration warning: {Label}.Host is missing. This upstream will be skipped.", label);
+
+                    if (u.Port <= 0)
+                        _logger.LogWarning("Configuration warning: {Label}.Port is {Port}. Connections to this upstream will fail.", label, u.Port);
+
+                    if (u.Process is { AutoStart: true } proc && string.IsNullOrEmpty(proc.FileName))
+                        _logger.LogWarning("Configuration warning: {Label}.Process.AutoStart is true but FileName is not set. The process will not start.", label);
+                }
+            }
+
+            // --- Dns section ---
+            if (DnsConfig != null && DnsConfig.Enabled)
+            {
+                if (DnsConfig.Port <= 0)
+                    _logger.LogWarning("Configuration warning: Dns.Port is {Port}. The DNS server will fail to bind. Check appsettings.json.", DnsConfig.Port);
+
+                var dnsUpstreams = DnsConfig.Upstreams ?? new List<UpstreamConfiguration>();
+                for (int i = 0; i < dnsUpstreams.Count; i++)
+                {
+                    var u = dnsUpstreams[i];
+                    var label = $"Dns.Upstreams[{i}]";
+                    if (!u.Enabled) continue;
+
+                    if (string.IsNullOrWhiteSpace(u.Host))
+                        _logger.LogWarning("Configuration warning: {Label}.Host is missing. This DNS upstream will be skipped.", label);
+
+                    if (u.Port <= 0)
+                        _logger.LogWarning("Configuration warning: {Label}.Port is {Port}. Connections to this DNS upstream will fail.", label, u.Port);
+                }
+            }
+
+            // --- WebUI section ---
+            if (WebUIConfig != null && WebUIConfig.Enabled && WebUIConfig.Port <= 0)
+                _logger.LogWarning("Configuration warning: WebUI.Port is {Port}. The WebUI server will fail to bind. Check appsettings.json.", WebUIConfig.Port);
         }
 
         public async Task StartProxyAsync(CancellationToken ct)

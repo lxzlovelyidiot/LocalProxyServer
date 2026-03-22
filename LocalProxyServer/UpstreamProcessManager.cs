@@ -391,7 +391,13 @@ namespace LocalProxyServer
                 _process?.Dispose();
 
                 // Expand environment variables
-                var fileName = Environment.ExpandEnvironmentVariables(_config.FileName!);
+                if (string.IsNullOrEmpty(_config.FileName))
+                {
+                    _logger?.LogError("Cannot restart upstream process: FileName is not configured");
+                    return false;
+                }
+
+                var fileName = Environment.ExpandEnvironmentVariables(_config.FileName);
                 var arguments = string.IsNullOrEmpty(_config.Arguments)
                     ? ""
                     : Environment.ExpandEnvironmentVariables(_config.Arguments);
