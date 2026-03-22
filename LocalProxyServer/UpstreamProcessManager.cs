@@ -24,12 +24,39 @@ namespace LocalProxyServer
         private Task? _monitorTask;
         private Task? _healthCheckTask;
         private JobObject? _jobObject;
+        private readonly SemaphoreSlim _restartLock = new(1, 1);
 
         public UpstreamConfiguration Configuration { get; }
-        public int? ProcessId => _process != null && !_process.HasExited ? _process.Id : null;
-        public bool ProcessRunning => _process != null && !_process.HasExited;
+        public int? ProcessId
+        {
+            get
+            {
+                try
+                {
+                    var p = _process;
+                    return p != null && !p.HasExited ? p.Id : null;
+                }
+                catch (ObjectDisposedException) { return null; }
+                catch (InvalidOperationException) { return null; }
+            }
+        }
+
+        public bool ProcessRunning
+        {
+            get
+            {
+                try
+                {
+                    var p = _process;
+                    return p != null && !p.HasExited;
+                }
+                catch (ObjectDisposedException) { return false; }
+                catch (InvalidOperationException) { return false; }
+            }
+        }
+
         public int RestartCount => _restartAttempts;
-        public bool? LastHealthCheckResult { get; private set; } // We should ideally update this in HealthCheckLoopAsync
+        public bool? LastHealthCheckResult { get; private set; }
 
         public UpstreamProcessManager(UpstreamConfiguration upstream, ILogger? logger = null)
         {
@@ -285,52 +312,58 @@ namespace LocalProxyServer
 
             while (!cancellationToken.IsCancellationRequested && !_isStopping)
             {
-                bool healthy = await ProbeUpstreamAsync(cancellationToken);
-                LastHealthCheckResult = healthy;
-
-                if (healthy)
-                {
-                    if (consecutiveFailures > 0)
-                    {
-                        _logger?.LogInformation(
-                            "Upstream {Host}:{Port} is healthy again after {Failures} failure(s)",
-                            _upstreamHost, _upstreamPort, consecutiveFailures);
-                    }
-                    consecutiveFailures = 0;
-                }
-                else
-                {
-                    consecutiveFailures++;
-                    _logger?.LogWarning(
-                        "Upstream health check failed for {Host}:{Port} ({Failures}/{Threshold})",
-                        _upstreamHost, _upstreamPort, consecutiveFailures, _healthCheckConfig.FailureThreshold);
-
-                    if (consecutiveFailures >= _healthCheckConfig.FailureThreshold)
-                    {
-                        _logger?.LogError(
-                            "Upstream {Host}:{Port} failed {Failures} consecutive health checks. Restarting process",
-                            _upstreamHost, _upstreamPort, consecutiveFailures);
-
-                        consecutiveFailures = 0;
-
-                        if (!await RestartProcessAsync(cancellationToken))
-                        {
-                            _logger?.LogError("Failed to restart upstream process after health check failure");
-                        }
-                        else
-                        {
-                            _logger?.LogInformation("Upstream process restarted due to health check failure");
-                        }
-                    }
-                }
-
                 try
                 {
+                    bool healthy = await ProbeUpstreamAsync(cancellationToken);
+                    LastHealthCheckResult = healthy;
+
+                    if (healthy)
+                    {
+                        if (consecutiveFailures > 0)
+                        {
+                            _logger?.LogInformation(
+                                "Upstream {Host}:{Port} is healthy again after {Failures} failure(s)",
+                                _upstreamHost, _upstreamPort, consecutiveFailures);
+                        }
+                        consecutiveFailures = 0;
+                    }
+                    else
+                    {
+                        consecutiveFailures++;
+                        _logger?.LogWarning(
+                            "Upstream health check failed for {Host}:{Port} ({Failures}/{Threshold})",
+                            _upstreamHost, _upstreamPort, consecutiveFailures, _healthCheckConfig.FailureThreshold);
+
+                        if (consecutiveFailures >= _healthCheckConfig.FailureThreshold)
+                        {
+                            _logger?.LogError(
+                                "Upstream {Host}:{Port} failed {Failures} consecutive health checks. Restarting process",
+                                _upstreamHost, _upstreamPort, consecutiveFailures);
+
+                            consecutiveFailures = 0;
+
+                            if (!await RestartProcessAsync(cancellationToken))
+                            {
+                                _logger?.LogError("Failed to restart upstream process after health check failure");
+                            }
+                            else
+                            {
+                                _logger?.LogInformation("Upstream process restarted due to health check failure");
+                            }
+                        }
+                    }
+
                     await Task.Delay(_healthCheckConfig.IntervalMs, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
                     break;
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Error in health check loop for {Host}:{Port}", _upstreamHost, _upstreamPort);
+                    // Wait a bit before retrying to avoid tight loop on persistent errors
+                    try { await Task.Delay(5000, cancellationToken); } catch { break; }
                 }
             }
         }
@@ -371,6 +404,12 @@ namespace LocalProxyServer
         /// </summary>
         private async Task<bool> RestartProcessAsync(CancellationToken cancellationToken)
         {
+            if (!await _restartLock.WaitAsync(0, cancellationToken))
+            {
+                _logger?.LogDebug("Restart already in progress, skipping redundant request");
+                return true; // Already restarting
+            }
+
             try
             {
                 if (_process != null && !_process.HasExited)
@@ -484,6 +523,10 @@ namespace LocalProxyServer
                 _logger?.LogError(ex, "Error restarting upstream process");
                 return false;
             }
+            finally
+            {
+                _restartLock.Release();
+            }
         }
 
         /// <summary>
@@ -553,6 +596,7 @@ namespace LocalProxyServer
             Stop();
             _monitorCts?.Dispose();
             _process?.Dispose();
+            _restartLock.Dispose();
 
             // Dispose job object - this will kill all processes in the job
             if (OperatingSystem.IsWindows())
